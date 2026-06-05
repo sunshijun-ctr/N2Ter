@@ -1627,7 +1627,7 @@ Agent：好的，我修改了第2集所有场景的对白。
 
 ### 9.4 导出方案
 
-#### 8.4.1 支持的格式
+#### 9.4.1 支持的格式
 
 | 格式 | 用途 | 备注 |
 |------|------|------|
@@ -1635,7 +1635,7 @@ Agent：好的，我修改了第2集所有场景的对白。
 | **PDF** | 人类阅读 | 重点优化，非 Markdown 渲染 |
 | **打包 zip** | 一次性导出全部 | YAML + PDF + 概览版 PDF |
 
-#### 8.4.2 PDF 导出 —— 自定义剧本排版（核心要求）
+#### 9.4.2 PDF 导出 —— 自定义剧本排版（核心要求）
 
 **问题**：常见做法（Markdown → PDF）渲染出来有 `**`、`##` 残留，结构生硬，不像剧本。
 
@@ -1677,7 +1677,7 @@ Agent：好的，我修改了第2集所有场景的对白。
 - **括号注**：居中，斜体
 - **对白**：居中区域（约页面中间 60%），不顶到两边
 
-#### 8.4.3 技术选型
+#### 9.4.3 技术选型
 
 **PDF 渲染**：**WeasyPrint**
 
@@ -1691,7 +1691,7 @@ Agent：好的，我修改了第2集所有场景的对白。
 - **思源黑体**（标题 / 强调）
 - 都是免费可商用，嵌入字体文件避免目标机器没字体
 
-#### 8.4.4 文件结构
+#### 9.4.4 文件结构
 
 ```
 exporters/
@@ -1714,7 +1714,7 @@ exporters/
           └─ overview.css
 ```
 
-#### 8.4.5 打包导出
+#### 9.4.5 打包导出
 
 用户点击"打包导出"，后端打包成 zip：
 
@@ -1739,23 +1739,26 @@ exporters/
 
 **核心原则**：Prompt 与代码分离，文本文件管理，支持热更新。
 
-#### 9.1.1 文件结构
+#### 10.1.1 文件结构
 
 ```
 prompts/
-  ├─ preprocessing_agent.md      # 预处理（章节摘要、角色分析、伏笔索引）
-  ├─ planning_agent.md            # 改编方案规划（集→章映射）
-  ├─ generation_agent.md          # 剧本生成核心
-  ├─ conversation_agent.md        # 多轮对话修改
-  └─ summarizer_agent.md          # 对话压缩用
+  ├─ preprocessing_agent.md      # 预处理（章节摘要、角色分析、伏笔索引）  ✅ demo
+  ├─ planning_agent.md            # 改编方案规划（集→章映射）              ✅ demo
+  ├─ generation_agent.md          # 剧本生成核心                          ✅ demo
+  ├─ conversation_agent.md        # 多轮对话修改                          ✅ demo
+  └─ summarizer_agent.md          # 对话压缩用（待补）
 ```
 
-**为什么拆 4 个**：
+> 📌 4 个核心 Agent 的 Prompt 已落地为 demo（v0.1）见 [prompts/](../prompts/)，遵循 10.1.2 模板 + Jinja2 占位符，后续随真实样本回归微调；`summarizer_agent` 待对话压缩联调时补充。
+
+**为什么拆这几个**：
 - 预处理与生成任务性质完全不同
 - Planning 是结构性工作，Generation 是细节工作，分开后 prompt 更聚焦
 - Conversation 涉及多轮修改逻辑，独立维护
+- summarizer 仅服务对话压缩，是工具型 prompt，独立于上述 4 个核心 Agent
 
-#### 9.1.2 Prompt 内部结构（统一模板）
+#### 10.1.2 Prompt 内部结构（统一模板）
 
 每个 prompt 文件都遵循以下结构：
 
@@ -1784,7 +1787,7 @@ prompts/
 - ...
 ```
 
-#### 9.1.3 加载机制
+#### 10.1.3 加载机制
 
 ```python
 class PromptLoader:
@@ -1799,7 +1802,7 @@ class PromptLoader:
 
 ### 10.2 Skill 系统实现
 
-#### 9.2.1 加载时机
+#### 10.2.1 加载时机
 
 **关键原则**：使用工具前先阅读 skill。
 
@@ -1817,7 +1820,7 @@ class PromptLoader:
 [Step 5] 开始调用工具，执行任务
 ```
 
-#### 9.2.2 题材选择机制
+#### 10.2.2 题材选择机制
 
 **上传时强制选题材（多选，1-3 个）**：
 
@@ -1852,7 +1855,7 @@ AI 分析后建议：都市情感（置信度 85%）
 
 差异不大时静默通过，避免打扰用户。
 
-#### 9.2.3 Skill 文件结构
+#### 10.2.3 Skill 文件结构
 
 ```
 skills/
@@ -1872,7 +1875,7 @@ skills/
 
 ### 10.3 Tool 基础架构
 
-#### 9.3.1 Base Schema 设计
+#### 10.3.1 Base Schema 设计
 
 **核心原则**：所有工具继承统一基类，额外参数在 base 上扩展。
 
@@ -1925,7 +1928,7 @@ class BaseTool(ABC):
         return result
 ```
 
-#### 9.3.2 错误处理与 Fallback 策略
+#### 10.3.2 错误处理与 Fallback 策略
 
 **原则**：每个工具都有 fallback，永远返回有用的东西。
 
@@ -1939,7 +1942,7 @@ class BaseTool(ABC):
 | `episode_patch` | 局部修改 | 返回原内容 + 错误提示，让用户重试 |
 | `screenplay_validate` | 严格 Schema 校验 | 宽松校验（仅必填字段） |
 
-#### 9.3.3 工具注册中心
+#### 10.3.3 工具注册中心
 
 ```python
 class ToolRegistry:
@@ -1954,7 +1957,7 @@ class ToolRegistry:
 
 ### 10.4 对话历史管理
 
-#### 9.4.1 数据模型
+#### 10.4.1 数据模型
 
 ```
 conversations (对话会话)
@@ -1987,7 +1990,7 @@ compressed_segments (压缩段)
   └─ compressed_at
 ```
 
-#### 9.4.2 多窗口多任务支持
+#### 10.4.2 多窗口多任务支持
 
 同一小说下可有多个 conversation，对应不同任务：
 
@@ -2000,7 +2003,7 @@ compressed_segments (压缩段)
 
 用户切换标签页时，从数据库加载对应 conversation 的历史消息。
 
-#### 9.4.3 对话压缩策略
+#### 10.4.3 对话压缩策略
 
 **核心算法：Anchor + Compress（头尾保留 + 中间压缩 + 关键点固定）**
 
@@ -2053,7 +2056,7 @@ def is_pinned_message(msg: Message) -> bool:
 输出：3-5 条要点
 ```
 
-#### 9.4.4 会话标题自动生成
+#### 10.4.4 会话标题自动生成
 
 对话进行 3 轮后，调便宜的 LLM 生成标题：
 
@@ -2069,7 +2072,7 @@ async def auto_title_conversation(conv_id: str):
 
 ### 10.5 API 路由设计
 
-#### 9.5.1 多用户隔离
+#### 10.5.1 多用户隔离
 
 **第一期实现**：每张表加 `user_id` 字段，第一期固定默认值。
 
@@ -2078,7 +2081,7 @@ async def auto_title_conversation(conv_id: str):
 - 未来要加登录系统不用改表结构
 - 暂不实现完整 OAuth，但路由参数预留 user_id
 
-#### 9.5.2 REST 路由（资源管理）
+#### 10.5.2 REST 路由（资源管理）
 
 ```
 # 小说管理
@@ -2115,7 +2118,7 @@ GET    /api/exports/{export_id}/download
 GET    /api/skills
 ```
 
-#### 9.5.3 WebSocket 路由（实时通信）
+#### 10.5.3 WebSocket 路由（实时通信）
 
 主要业务走 WebSocket：
 
@@ -2141,7 +2144,7 @@ server → client:
   - {"type": "error", "error": "..."}
 ```
 
-#### 9.5.4 WebSocket 重连策略
+#### 10.5.4 WebSocket 重连策略
 
 用户网络断开重连时，恢复：
 - ✅ 历史消息（必须）
@@ -2150,7 +2153,7 @@ server → client:
 
 ### 10.6 前端展示规范
 
-#### 9.6.1 工具调用展示
+#### 10.6.1 工具调用展示
 
 **默认折叠**：
 
@@ -2365,8 +2368,10 @@ backend/
    - ✅ 多 agent 并行编排（Celery chord/group/chain）
    - ✅ Celery 任务定义（6 个 Stage）
    - ✅ 失败重试与跳过逻辑（重试 + Fallback 装饰器）
-7. **Agent System Prompt 模板编写** ⭐ ← 下一步
-   - 4 个 prompt 文件具体内容
+7. **Agent System Prompt 模板编写**（demo v0.1 已落地 [prompts/](../prompts/)，待微调）⭐ ← 进行中
+   - ✅ 4 个核心 prompt 文件 demo（preprocessing / planning / generation / conversation）
+   - ⬜ 随真实小说样本回归后微调
+   - ⬜ 补 `summarizer_agent`（对话压缩）
 8. **数据库 DDL 最终版**
    - 所有约束、索引
    - Alembic 迁移脚本
