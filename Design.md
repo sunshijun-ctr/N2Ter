@@ -2372,9 +2372,10 @@ backend/
    - ✅ 4 个核心 prompt 文件 demo（preprocessing / planning / generation / conversation）
    - ⬜ 随真实小说样本回归后微调
    - ⬜ 补 `summarizer_agent`（对话压缩）
-8. **数据库 DDL 最终版**
-   - 所有约束、索引
-   - Alembic 迁移脚本
+8. **数据库 DDL 最终版**（v1.0 已落地，见 [db/ddl.sql](db/ddl.sql)）⭐ ← 进行中
+   - ✅ 全部表 + 枚举类型 + 约束 + 索引（含 JSONB GIN、续传/向量化部分索引）
+   - ✅ 多用户预留 user_id、updated_at 触发器、内置 skill 占位、进度/导出表
+   - ⬜ 转 Alembic 迁移脚本（待 backend 工程初始化后）
 9. **前端 UI 设计**（用户后续提供）
 10. **Docker 部署配置**
 
