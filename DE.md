@@ -2,10 +2,11 @@
 
 **项目名称**：AI 小说转剧本工具  
 **讨论日期**：2026 年 6 月  
-**文档版本**：v1.1  
+**文档版本**：v1.2  
 **文档目的**：记录项目从需求到架构的完整设计决策过程
 
-**v1.1 更新**：补充检索策略、Embedding 选型、PDF 导出方案、概览版自动生成流程
+**v1.1 更新**：补充检索策略、Embedding 选型、PDF 导出方案、概览版自动生成流程  
+**v1.2 更新**：Prompt 文件管理、Skill 加载机制、Tool Base Schema、对话历史与压缩策略、FastAPI 路由设计、多用户预留、题材选择强制化
 
 ---
 
@@ -19,8 +20,9 @@
 6. [上下文与 RAG 设计](#六上下文与-rag-设计)
 7. [数据库设计](#七数据库设计)
 8. [生成流程设计](#八生成流程设计)
-9. [关键技术决策回顾](#九关键技术决策回顾)
-10. [待办事项](#十待办事项)
+9. [工程实现规范](#九工程实现规范)
+10. [关键技术决策回顾](#十关键技术决策回顾)
+11. [待办事项](#十一待办事项)
 
 ---
 
@@ -826,9 +828,517 @@ exporters/
 
 ---
 
-## 九、关键技术决策回顾
+## 九、工程实现规范
 
-### 9.1 已确定的决策清单
+本章定义项目的工程实现细节，是后续编码的直接依据。
+
+### 9.1 Prompt 文件管理
+
+**核心原则**：Prompt 与代码分离，文本文件管理，支持热更新。
+
+#### 9.1.1 文件结构
+
+```
+prompts/
+  ├─ preprocessing_agent.md      # 预处理（章节摘要、角色分析、伏笔索引）
+  ├─ planning_agent.md            # 改编方案规划（集→章映射）
+  ├─ generation_agent.md          # 剧本生成核心
+  ├─ conversation_agent.md        # 多轮对话修改
+  └─ summarizer_agent.md          # 对话压缩用
+```
+
+**为什么拆 4 个**：
+- 预处理与生成任务性质完全不同
+- Planning 是结构性工作，Generation 是细节工作，分开后 prompt 更聚焦
+- Conversation 涉及多轮修改逻辑，独立维护
+
+#### 9.1.2 Prompt 内部结构（统一模板）
+
+每个 prompt 文件都遵循以下结构：
+
+```markdown
+# {Agent Name} Prompt
+
+## Role
+角色定义
+
+## Capabilities
+可用的工具列表
+
+## Workflow
+执行步骤
+
+## Output Format
+输出格式要求
+
+## Constraints
+约束条件
+
+## Variables（运行时注入）
+- {{schema_definition}}
+- {{novel_summary}}
+- {{character_arcs}}
+- ...
+```
+
+#### 9.1.3 加载机制
+
+```python
+class PromptLoader:
+    def load(self, name: str, variables: dict) -> str:
+        template = self._read_file(f"prompts/{name}.md")
+        return Template(template).render(**variables)
+```
+
+- 使用 Jinja2 渲染变量占位符
+- 支持热更新（修改文件无需重启服务）
+- Git 版本控制友好
+
+### 9.2 Skill 系统实现
+
+#### 9.2.1 加载时机
+
+**关键原则**：使用工具前先阅读 skill。
+
+```
+[Agent 收到任务]
+   ↓
+[Step 1] 从 novels.genre 读取用户上传时强制选择的题材
+   ↓
+[Step 2] 加载对应 skill（主题材决定主 skill）
+   ↓
+[Step 3] 读取 SKILL.md 拼接到 system prompt
+   ↓
+[Step 4] 加载配套资源（glossary.json / examples.yaml）
+   ↓
+[Step 5] 开始调用工具，执行任务
+```
+
+#### 9.2.2 题材选择机制
+
+**上传时强制选题材（多选，1-3 个）**：
+
+```
+请选择小说题材（必选，1-3 个）：
+☑ 古装权谋     ← 主要题材
+☑ 武侠         ← 次要题材
+☐ 仙侠玄幻
+☐ 都市情感
+☐ 悬疑推理
+☐ AI 短剧分镜
+
+每个选项配说明文字和样例书目，帮用户判断。
+```
+
+**为什么强制选**：
+- 用户对自己作品最了解，AI 识别不如人选准
+- 多选支持混合题材（《庆余年》：古装权谋 + 武侠）
+- 主题材决定主 skill，次题材作为辅助提示
+
+**预处理时 AI 二次确认**：
+
+预处理过程中 AI 会做一次题材识别。**仅在 AI 判断与用户选择差异很大时**（置信度 > 80% 且不一致）才弹提示：
+
+```
+你选择的题材：仙侠玄幻
+AI 分析后建议：都市情感（置信度 85%）
+
+⚠ 题材选择会影响剧本质量。要修改吗？
+[修改为 AI 建议] [保持我的选择]
+```
+
+差异不大时静默通过，避免打扰用户。
+
+#### 9.2.3 Skill 文件结构
+
+```
+skills/
+  ├─ skill_general/             # 默认通用 skill（兜底）
+  ├─ skill_urban_drama/         # 都市情感
+  ├─ skill_xianxia/             # 仙侠玄幻
+  ├─ skill_ancient_power/       # 古装权谋
+  ├─ skill_wuxia/               # 武侠
+  ├─ skill_suspense/            # 悬疑推理
+  └─ skill_ai_shorts/           # AI 短剧分镜
+
+每个 skill 内部：
+  ├─ SKILL.md                   # 给 agent 看的指令
+  ├─ glossary.json              # 题材术语词典
+  └─ examples.yaml              # few-shot 改编案例
+```
+
+### 9.3 Tool 基础架构
+
+#### 9.3.1 Base Schema 设计
+
+**核心原则**：所有工具继承统一基类，额外参数在 base 上扩展。
+
+```python
+# tools/base.py
+class ToolStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    FALLBACK = "fallback"
+
+class ToolResult(BaseModel):
+    status: ToolStatus
+    data: Any = None
+    error: Optional[str] = None
+    metadata: dict = {}
+    retry_count: int = 0
+    used_fallback: bool = False
+
+class BaseToolInput(BaseModel):
+    novel_id: str
+    request_id: str
+
+class BaseTool(ABC):
+    name: str
+    description: str
+    max_retries: int = 3
+    
+    @abstractmethod
+    async def execute(self, input_data: BaseToolInput) -> ToolResult:
+        pass
+    
+    @abstractmethod
+    async def fallback(self, input_data: BaseToolInput) -> ToolResult:
+        """主逻辑失败时的降级方案"""
+        pass
+    
+    async def run(self, input_data: BaseToolInput) -> ToolResult:
+        """统一执行入口：重试 3 次失败后 fallback"""
+        for attempt in range(self.max_retries):
+            try:
+                result = await self.execute(input_data)
+                result.retry_count = attempt
+                return result
+            except Exception:
+                await asyncio.sleep(2 ** attempt)  # 指数退避
+        
+        # 重试 3 次失败 → fallback
+        result = await self.fallback(input_data)
+        result.used_fallback = True
+        return result
+```
+
+#### 9.3.2 错误处理与 Fallback 策略
+
+**原则**：每个工具都有 fallback，永远返回有用的东西。
+
+| 工具 | 主逻辑 | Fallback |
+|------|--------|----------|
+| `chapter_get` | 取完整章节 | 取章节摘要 → 取章节标题 |
+| `chapter_search` | 向量检索 + Rerank | 仅向量检索（跳过 rerank） → 返回章节摘要 |
+| `character_timeline` | 查角色完整时间线 | 查角色基本信息 |
+| `foreshadowing_lookup` | 查伏笔索引 | 返回空数组（不影响主流程） |
+| `text2screenplay` | 完整生成 | 简化 Schema 生成（减少字段） |
+| `episode_patch` | 局部修改 | 返回原内容 + 错误提示，让用户重试 |
+| `screenplay_validate` | 严格 Schema 校验 | 宽松校验（仅必填字段） |
+
+#### 9.3.3 工具注册中心
+
+```python
+class ToolRegistry:
+    def register(self, tool: BaseTool): ...
+    def get(self, name: str) -> BaseTool: ...
+    def list_for_agent(self) -> list[dict]:
+        """生成给 LLM 的工具定义"""
+        ...
+```
+
+启动时统一注册所有工具，agent 通过 registry 调用。
+
+### 9.4 对话历史管理
+
+#### 9.4.1 数据模型
+
+```
+conversations (对话会话)
+  ├─ id                       UUID
+  ├─ user_id                  -- 用户 ID（预留字段，第一期默认值）
+  ├─ novel_id (FK)
+  ├─ screenplay_id (FK)       -- 可空，未选 Schema 前
+  ├─ title                    -- AI 自动生成或用户改
+  ├─ context_type             -- preprocessing/planning/generation/conversation
+  ├─ status                   -- active/archived
+  └─ ...
+
+messages (对话消息)
+  ├─ id                       UUID
+  ├─ conversation_id (FK)
+  ├─ role                     -- user/assistant/tool
+  ├─ content                  -- TEXT
+  ├─ tool_calls               -- JSONB
+  ├─ tool_results             -- JSONB
+  ├─ token_usage              -- JSONB
+  ├─ is_pinned                -- BOOL，关键决策点标记
+  ├─ is_compressed            -- BOOL，已被压缩进摘要
+  └─ ...
+
+compressed_segments (压缩段)
+  ├─ id
+  ├─ conversation_id (FK)
+  ├─ summary                  -- 中间对话摘要
+  ├─ original_message_ids     -- 被压缩的消息 ID 列表
+  └─ compressed_at
+```
+
+#### 9.4.2 多窗口多任务支持
+
+同一小说下可有多个 conversation，对应不同任务：
+
+```
+红楼梦 编剧版
+  ├─ conv_001: "整体风格调整"
+  ├─ conv_002: "林黛玉对白优化"
+  └─ conv_003: "前 10 集节奏问题"
+```
+
+用户切换标签页时，从数据库加载对应 conversation 的历史消息。
+
+#### 9.4.3 对话压缩策略
+
+**核心算法：Anchor + Compress（头尾保留 + 中间压缩 + 关键点固定）**
+
+参数：
+- **触发阈值**：60% × Claude Sonnet 200K context = **120K token**
+- **保留头部**：3 轮（user + assistant 视为 1 轮）
+- **保留尾部**：3 轮
+- **关键点固定**：is_pinned = true 的消息无论位置一律保留
+
+**关键决策点的识别**：
+
+```python
+PINNED_KEYWORDS = [
+    "确认方案", "改编方案", "集数",
+    "风格", "题材", "切换 Schema"
+]
+
+def is_pinned_message(msg: Message) -> bool:
+    if msg.metadata.get("user_pinned"):
+        return True
+    if msg.role == "user" and any(kw in msg.content for kw in PINNED_KEYWORDS):
+        return True
+    return False
+```
+
+**压缩流程**：
+
+```
+1. 检查 token 是否达到 120K（60% × 200K）
+2. 取出所有消息，分类为：head / middle / tail / pinned
+3. 中间区域的非 pinned 消息 → 调 summarizer_agent 生成摘要
+4. 持久化摘要到 compressed_segments 表
+5. 中间消息标记 is_compressed = true（不删除，仅跳过）
+6. 后续构建 context 时：head + pinned + 摘要 + tail
+```
+
+**压缩 Prompt**：
+
+```
+保留：
+1. 用户做出的具体决策
+2. agent 完成的修改
+3. 已确认的偏好
+
+不需要保留：
+- 客套话、确认语
+- 工具调用细节
+- 已被后续对话覆盖的临时决定
+
+输出：3-5 条要点
+```
+
+#### 9.4.4 会话标题自动生成
+
+对话进行 3 轮后，调便宜的 LLM 生成标题：
+
+```python
+async def auto_title_conversation(conv_id: str):
+    msgs = await db.get_messages(conv_id, limit=6)
+    if len(msgs) >= 6 and not conversation.has_title:
+        title = await llm.generate_title(msgs)
+        await db.update_conversation_title(conv_id, title)
+```
+
+像 ChatGPT 那样，列表里显示"林黛玉对白优化"而不是"新对话"。
+
+### 9.5 API 路由设计
+
+#### 9.5.1 多用户隔离
+
+**第一期实现**：每张表加 `user_id` 字段，第一期固定默认值。
+
+**原因**：
+- 加字段成本几乎为零
+- 未来要加登录系统不用改表结构
+- 暂不实现完整 OAuth，但路由参数预留 user_id
+
+#### 9.5.2 REST 路由（资源管理）
+
+```
+# 小说管理
+POST   /api/novels                          # 上传小说 + 选题材
+GET    /api/novels/{novel_id}
+GET    /api/novels
+DELETE /api/novels/{novel_id}
+
+# 剧本管理
+POST   /api/screenplays                     # 创建剧本（选 Schema）
+GET    /api/screenplays/{id}
+GET    /api/novels/{novel_id}/screenplays
+
+# 集管理
+GET    /api/screenplays/{id}/episodes
+GET    /api/episodes/{episode_id}
+PUT    /api/episodes/{episode_id}           # 用户手动修改（画布编辑）
+
+# 对话管理
+POST   /api/conversations
+GET    /api/conversations
+GET    /api/conversations/{conv_id}/messages
+DELETE /api/conversations/{conv_id}
+
+# 任务管理
+GET    /api/tasks/{task_id}
+POST   /api/tasks/{task_id}/cancel
+
+# 导出
+POST   /api/screenplays/{id}/export
+GET    /api/exports/{export_id}/download
+
+# Skill 管理
+GET    /api/skills
+```
+
+#### 9.5.3 WebSocket 路由（实时通信）
+
+主要业务走 WebSocket：
+
+```
+WS /ws/conversations/{conv_id}
+```
+
+**消息类型**：
+
+```
+client → server:
+  - {"type": "message", "content": "..."}
+  - {"type": "stop"}                              # 中断 agent
+
+server → client:
+  - {"type": "message_start"}
+  - {"type": "content_delta", "text": "..."}      # 流式文本
+  - {"type": "tool_call", ...}                    # 工具调用通知
+  - {"type": "tool_result", ...}                  # 工具结果
+  - {"type": "message_end"}
+  - {"type": "episode_generated", "episode": {...}}
+  - {"type": "task_progress", "progress": 45}
+  - {"type": "error", "error": "..."}
+```
+
+#### 9.5.4 WebSocket 重连策略
+
+用户网络断开重连时，恢复：
+- ✅ 历史消息（必须）
+- ✅ 正在执行的任务状态（必须，让用户看到 agent 还在工作）
+- ❌ 部分流式输出（不做，用户刷新页面即可）
+
+### 9.6 前端展示规范
+
+#### 9.6.1 工具调用展示
+
+**默认折叠**：
+
+```
+┌──────────────────────────────────────────┐
+│ Claude                                   │
+│                                          │
+│ ▶ [工具调用 · 3 步]    ← 默认折叠         │
+│                                          │
+│ 我已经把第 5 集所有场景的对白调整为文雅风格。│
+│ ...                                      │
+└──────────────────────────────────────────┘
+```
+
+**展开后**：
+
+```
+▼ [工具调用 · 3 步]
+  ├─ chapter_get(5, mode="full")  · 156ms · 成功
+  ├─ character_timeline("林黛玉")  · 89ms · 成功
+  └─ episode_patch(ep_5, ...)     · 3.2s · 成功
+```
+
+**不做全局开关**，保持 UI 简洁。
+
+### 9.7 项目文件结构
+
+```
+backend/
+├─ app/
+│   ├─ main.py
+│   ├─ routes/
+│   │   ├─ novels.py
+│   │   ├─ screenplays.py
+│   │   ├─ episodes.py
+│   │   ├─ conversations.py
+│   │   ├─ tasks.py
+│   │   ├─ exports.py
+│   │   └─ websocket.py
+│   ├─ agents/
+│   │   ├─ base_agent.py
+│   │   ├─ preprocessing_agent.py
+│   │   ├─ planning_agent.py
+│   │   ├─ generation_agent.py
+│   │   └─ conversation_agent.py
+│   ├─ tools/
+│   │   ├─ base.py
+│   │   ├─ chapter_get.py
+│   │   ├─ chapter_search.py
+│   │   ├─ character_timeline.py
+│   │   ├─ foreshadowing_lookup.py
+│   │   ├─ text2screenplay.py
+│   │   ├─ episode_patch.py
+│   │   ├─ screenplay_validate.py
+│   │   └─ registry.py
+│   ├─ services/
+│   │   ├─ prompt_loader.py
+│   │   ├─ skill_loader.py
+│   │   ├─ embedding_service.py
+│   │   ├─ rerank_service.py
+│   │   ├─ llm_service.py
+│   │   └─ conversation_compressor.py
+│   ├─ models/                       # SQLAlchemy
+│   ├─ schemas/                      # Pydantic
+│   ├─ workers/                      # Celery
+│   └─ exporters/
+├─ prompts/
+│   ├─ preprocessing_agent.md
+│   ├─ planning_agent.md
+│   ├─ generation_agent.md
+│   ├─ conversation_agent.md
+│   └─ summarizer_agent.md
+├─ skills/
+│   ├─ skill_general/
+│   ├─ skill_urban_drama/
+│   ├─ skill_xianxia/
+│   └─ ...
+├─ alembic/
+├─ tests/
+├─ docker/
+│   ├─ Dockerfile.api
+│   ├─ Dockerfile.worker
+│   └─ docker-compose.yml
+└─ pyproject.toml
+```
+
+---
+
+## 十、关键技术决策回顾
+
+### 10.1 已确定的决策清单
 
 | 决策点 | 选择 | 关键理由 |
 |--------|------|---------|
@@ -859,8 +1369,23 @@ exporters/
 | Skill 系统 | 内置 5 个 + 预留接口 | 快速启动 + 未来扩展 |
 | 预处理失败 | 重试 3 次后跳过并告知用户 | 防止单点失败阻塞全流程 |
 | 画布修改逻辑 | 用户覆盖优先，Agent 基于最新画布 | 简化状态管理 |
+| Prompt 管理 | 单独文件管理（4 个 prompt） | 与代码分离，热更新 |
+| Skill 加载时机 | 使用工具前阅读 | Claude Skills 设计哲学 |
+| 题材选择 | 上传时强制选（多选 1-3 个） | 用户最了解自己作品，混合题材常见 |
+| 题材二次确认 | AI 预处理时识别，差异大才提示 | 防止用户选错 |
+| Tool 基础架构 | Base Schema + 扩展额外参数 | 减少重复代码 |
+| 错误处理 | 重试 3 次 → fallback 降级 | 永远返回有用结果 |
+| 多用户隔离 | 预留 user_id 字段（第一期默认值） | 几乎零成本预留扩展 |
+| 对话历史存储 | 持久化到数据库 | 支持多窗口多任务 |
+| 对话压缩策略 | Anchor + Compress | 头 3 尾 3 + 关键点固定 + 中间压缩 |
+| 压缩触发阈值 | 60% × 200K = 120K token | Claude Sonnet 为基准 |
+| 关键点保护 | is_pinned 标记，永不压缩 | 集数、风格、Schema 切换等关键决策 |
+| 会话标题 | 3 轮后自动生成 | 类 ChatGPT 体验 |
+| API 路由 | REST + WebSocket 双通道 | REST 管资源，WS 管实时通信 |
+| WebSocket 重连 | 恢复历史 + 任务状态，不恢复流式输出 | 简化实现，体验已足够 |
+| 工具调用展示 | 默认折叠，点击展开，无全局开关 | UI 简洁 |
 
-### 9.2 讨论中被否决的方案
+### 10.2 讨论中被否决的方案
 
 | 否决方案 | 否决理由 |
 |---------|---------|
@@ -871,8 +1396,13 @@ exporters/
 | Multi-Agent 并行生成剧本 | 剧本是强依赖序列，会破坏连贯性 |
 | 按集分配给子 Agent | 风格漂移、转场断裂、用户修改难同步 |
 | 复杂的字段锁定机制 | 用户覆盖优先足够简单可用 |
+| 上传时单选题材 | 混合题材小说（如庆余年）单选无法覆盖 |
+| AI 自动识别题材（用户被动） | 用户对自己作品最了解，让 AI 猜不如让用户选 |
+| 引入 BM25 | chunk 规模小，纯向量+Rerank 已足够 |
+| 工具调用全局展开开关 | 增加 UI 复杂度，普通用户用不到 |
+| 简单截断式对话压缩 | 丢失头部需求与关键决策 |
 
-### 9.3 待回答的问题
+### 10.3 待回答的问题
 
 #### 关于 Schema（已决策 ✅）
 - ✅ AI 视频版的 `generation_prompt` 仅中文版
@@ -885,6 +1415,7 @@ exporters/
 - ✅ 章节摘要细致度：500 字
 - ✅ 跨集风格一致性：用户偏好持久化为剧本级元数据
 - ✅ 概览版生成：预处理完成时自动生成
+- ✅ 题材选择：上传时强制选（多选 1-3 个）+ AI 二次确认
 
 #### 关于 RAG 与检索（已决策 ✅）
 - ✅ Embedding 模型：BGE-M3（默认，可配置）
@@ -897,53 +1428,49 @@ exporters/
 - ✅ PDF 排版：自定义模板（WeasyPrint + 思源字体）
 - ✅ 三套 Schema 各自对应一套 PDF 模板
 
+#### 关于工程实现（已决策 ✅）
+- ✅ Prompt 单独文件管理（4 个 prompt）
+- ✅ Skill 使用工具前阅读
+- ✅ Tool 用 Base Schema + 扩展
+- ✅ 错误处理：重试 3 次 → fallback
+- ✅ 多用户：预留 user_id 字段
+- ✅ 对话历史持久化数据库
+- ✅ 对话压缩：Anchor + Compress，60% 触发，头3尾3，关键点 pinned
+- ✅ WebSocket 重连：恢复历史+任务状态
+- ✅ 工具调用：折叠显示，无全局开关
+
 #### 关于商业化（暂不考虑，留待后续）
 - 付费策略：100 万字一次生成成本 ¥100-200，需要额度系统？
-- 多用户隔离：单用户 vs 多人协作？
+- 多用户隔离：完整 OAuth？协作模式？
 - 小说版权与隐私：原文如何安全存储？
 
 ---
 
-## 十、待办事项
+## 十一、待办事项
 
-### 10.1 下一步设计任务
+### 11.1 下一步设计任务
 
-按优先级排序：
+按优先级排序，已完成项打 ✅：
 
-1. **Agent 的 System Prompt 模板设计** ⭐
-   - 决定 agent 的核心行为
-   - 三套 Schema 各自的 prompt 变体
-   - Skill 注入机制
-
-2. **Tool 接口的精确定义**
-   - Python 函数签名
-   - 输入/输出 JSON Schema
-   - 错误处理约定
-
-3. **预处理 Pipeline 的具体实现**
-   - FastAPI 路由
+1. ✅ **Schema 设计完成**（v1.0）
+2. ✅ **架构与技术栈定型**（v1.0）
+3. ✅ **RAG 与检索策略定型**（v1.1）
+4. ✅ **导出方案定型**（v1.1）
+5. ✅ **工程实现规范定型**（v1.2，含 Prompt/Skill/Tool/对话/路由）
+6. **预处理 Pipeline 的具体实现** ⭐ ← 下一步
+   - 章节拆分规则
+   - 多 agent 并行编排
    - Celery 任务定义
-   - 失败重试逻辑
-
-4. **数据库表的最终 DDL**
+   - 失败重试与跳过逻辑
+7. **Agent System Prompt 模板编写**
+   - 4 个 prompt 文件具体内容
+8. **数据库 DDL 最终版**
    - 所有约束、索引
-   - 迁移脚本
+   - Alembic 迁移脚本
+9. **前端 UI 设计**（用户后续提供）
+10. **Docker 部署配置**
 
-5. **FastAPI 路由设计**
-   - REST 接口契约
-   - WebSocket 消息格式
-
-6. **前端 UI 设计**
-   - 画布交互细节
-   - 对话框设计
-   - 进度展示
-
-7. **Docker 部署配置**
-   - docker-compose.yml
-   - 环境变量管理
-   - 数据持久化方案
-
-### 10.2 开发里程碑建议
+### 11.2 开发里程碑建议
 
 **Milestone 1：MVP（单 Schema 跑通）**
 - 选 1 套 Schema（建议编剧版）
@@ -994,6 +1521,11 @@ exporters/
 | Rerank | 检索后重排，提升 top-K 相关性 |
 | WeasyPrint | HTML/CSS 转 PDF 的 Python 库，本项目用于自定义 PDF 排版 |
 | 思源字体 | Adobe 与 Google 合作的开源中文字体（思源宋体/黑体） |
+| Anchor + Compress | 对话压缩策略：头尾保留 + 中间压缩 + 关键点固定 |
+| is_pinned | 关键决策点标记，压缩时永不丢弃 |
+| Fallback | 工具主逻辑失败后的降级方案，确保返回有用结果 |
+| ToolResult | 所有工具的统一返回格式（status / data / metadata） |
+| context_type | 对话类型标记（preprocessing / planning / generation / conversation） |
 
 ---
 
