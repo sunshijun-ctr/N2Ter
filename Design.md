@@ -2,11 +2,12 @@
 
 **项目名称**：AI 小说转剧本工具  
 **讨论日期**：2026 年 6 月  
-**文档版本**：v1.2  
+**文档版本**：v1.3  
 **文档目的**：记录项目从需求到架构的完整设计决策过程
 
 **v1.1 更新**：补充检索策略、Embedding 选型、PDF 导出方案、概览版自动生成流程  
-**v1.2 更新**：Prompt 文件管理、Skill 加载机制、Tool Base Schema、对话历史与压缩策略、FastAPI 路由设计、多用户预留、题材选择强制化
+**v1.2 更新**：Prompt 文件管理、Skill 加载机制、Tool Base Schema、对话历史与压缩策略、FastAPI 路由设计、多用户预留、题材选择强制化  
+**v1.3 更新**：新增「预处理 Pipeline 实现设计」章节（章节拆分规则、Celery 编排、各 Stage 任务定义、进度推送、断点续传、错误监控与质量分级）
 
 ---
 
@@ -18,11 +19,12 @@
 4. [整体架构决策](#四整体架构决策)
 5. [Agent 与工具设计](#五agent-与工具设计)
 6. [上下文与 RAG 设计](#六上下文与-rag-设计)
-7. [数据库设计](#七数据库设计)
-8. [生成流程设计](#八生成流程设计)
-9. [工程实现规范](#九工程实现规范)
-10. [关键技术决策回顾](#十关键技术决策回顾)
-11. [待办事项](#十一待办事项)
+7. [预处理 Pipeline 实现设计](#七预处理-pipeline-实现设计)
+8. [数据库设计](#八数据库设计)
+9. [生成流程设计](#九生成流程设计)
+10. [工程实现规范](#十工程实现规范)
+11. [关键技术决策回顾](#十一关键技术决策回顾)
+12. [待办事项](#十二待办事项)
 
 ---
 
@@ -525,11 +527,912 @@ embed:bge-m3:{md5(query)}  →  vector
 | 向量化 | ¥5 |
 | **总计** | **约 ¥135** |
 
+> 📌 本节为概览；完整的 Stage 编排、章节拆分规则、Celery 任务定义、进度推送与断点续传见 **第七章 · 预处理 Pipeline 实现设计**。
+
 ---
 
-## 七、数据库设计
+## 七、预处理 Pipeline 实现设计
 
-### 7.1 PostgreSQL 表结构
+> 本章是 6.8 节概览的落地细化，覆盖章节拆分、Celery 编排、各 Stage 任务定义、进度推送、断点续传与错误监控。
+
+### 7.1 Pipeline 总览
+
+#### 7.1.1 全景图
+
+```
+用户上传小说 + 选择题材
+        ↓
+[Stage 1] 章节拆分 (同步, 10 秒内)
+        ↓
+[Stage 2] 章节级处理 (并行, 80 任务)
+   ├─ 章节摘要
+   ├─ 章节关键事件提取
+   └─ 章节语义切片
+        ↓
+[Stage 3] 全书级分析 (并行, 3 任务)
+   ├─ 全书摘要
+   ├─ 角色弧光分析
+   └─ 伏笔索引构建
+        ↓
+[Stage 4] 向量化入库 (并行, 按 chunk)
+        ↓
+[Stage 5] 题材二次确认 (与用户选择对比)
+        ↓
+[Stage 6] 自动生成概览版剧本
+        ↓
+预处理完成，状态变为 ready_for_planning
+```
+
+每个 Stage 之间有依赖，Stage 内部尽量并行。
+
+#### 7.1.2 时间预估（红楼梦 70 万字为例）
+
+| Stage | 任务数 | 单任务耗时 | 并行后总耗时 |
+|-------|--------|-----------|-------------|
+| 1. 章节拆分 | 1 | 10 秒 | 10 秒 |
+| 2. 章节处理 | 80 × 3 = 240 | 20 秒 | 约 60-90 秒（按 10 并发） |
+| 3. 全书分析 | 3 | 60-90 秒 | 90 秒 |
+| 4. 向量化入库 | 500 个 chunk | 0.5 秒 | 约 30 秒（按 20 并发） |
+| 5. 题材二次确认 | 1 | 15 秒 | 15 秒 |
+| 6. 概览版生成 | 1 | 90 秒 | 90 秒 |
+| **总计** | | | **约 5-6 分钟** |
+
+### 7.2 章节拆分规则
+
+#### 7.2.1 中文小说的章节标记多样性
+
+实际样本中遇到的格式：
+
+```
+第一章 初见
+第1章 初见
+第一章   初见
+第 1 章 初见
+Chapter 1: 初见
+第一回 林黛玉抛父进京都
+卷一·第一章
+楔子 / 序章 / 引子
+番外·黛玉之死
+尾声
+后记
+```
+
+#### 7.2.2 拆分规则（按优先级）
+
+```python
+CHAPTER_PATTERNS = [
+    # 优先级 1：标准章节
+    r'^第[一二三四五六七八九十百千零〇\d]+[章回节]\s*.*$',
+
+    # 优先级 2：英文章节
+    r'^Chapter\s+\d+[:\s].*$',
+
+    # 优先级 3：卷+章组合
+    r'^卷[一二三四五六七八九十\d]+[·\s]*第[一二三四五六七八九十\d]+[章回].*$',
+
+    # 优先级 4：特殊章节
+    r'^(楔子|序章|序言|引子|前言|尾声|后记|番外.*|外传.*)$',
+]
+```
+
+**匹配策略**：
+
+- 逐行扫描，匹配章节行（独立成行的章节标记）
+- 同一篇小说必须使用同一种模式（避免误匹配）
+- 先扫第一遍统计哪种模式出现最多，选定主模式
+- 再扫第二遍按主模式拆分
+
+#### 7.2.3 边界情况处理
+
+| 情况 | 处理方式 |
+|------|---------|
+| 无任何章节标记 | 按字数均匀切（每 5000 字一段），称为"伪章节" |
+| 章节标记 < 3 个 | 同上 |
+| 章节标记数量明显不均（如某章 10 万字） | 该章再细分（按场景或字数） |
+| 章节内有子标题（一、二、三） | 不拆分，保留为章节内的结构 |
+| 楔子/序章/番外 | 单独标记为 `special_type`，不计入正集 |
+| 出现"目录"/"声明"等非内容章节 | 用关键词过滤跳过 |
+
+#### 7.2.4 实现伪代码
+
+```python
+def split_chapters(text: str) -> list[Chapter]:
+    lines = text.split('\n')
+
+    # Pass 1: 统计模式出现频率
+    pattern_counts = {p: 0 for p in CHAPTER_PATTERNS}
+    for line in lines:
+        for pattern in CHAPTER_PATTERNS:
+            if re.match(pattern, line.strip()):
+                pattern_counts[pattern] += 1
+
+    # 选定主模式
+    main_pattern = max(pattern_counts, key=pattern_counts.get)
+
+    # 如果主模式出现次数 < 3，降级为伪章节切分
+    if pattern_counts[main_pattern] < 3:
+        return _split_by_word_count(text, words_per_chapter=5000)
+
+    # Pass 2: 按主模式切分
+    chapters = []
+    current_chapter = None
+    for line in lines:
+        if re.match(main_pattern, line.strip()):
+            if current_chapter:
+                chapters.append(current_chapter)
+            current_chapter = Chapter(
+                title=line.strip(),
+                num=len(chapters) + 1,
+                content_lines=[]
+            )
+        elif current_chapter:
+            current_chapter.content_lines.append(line)
+
+    if current_chapter:
+        chapters.append(current_chapter)
+
+    # 后处理：标记特殊章节
+    for ch in chapters:
+        if re.match(r'^(楔子|序章|引子|尾声|后记|番外.*)$', ch.title):
+            ch.special_type = 'special'
+
+    # 检查超长章节，需要细分
+    for ch in chapters:
+        if ch.word_count > 20000:
+            ch.needs_sub_split = True
+
+    return chapters
+```
+
+### 7.3 Celery 任务编排
+
+#### 7.3.1 项目结构
+
+```
+backend/app/workers/
+├─ __init__.py
+├─ celery_app.py              # Celery 实例配置
+├─ preprocessing/
+│   ├─ __init__.py
+│   ├─ orchestrator.py        # 编排任务
+│   ├─ chapter_split.py       # Stage 1
+│   ├─ chapter_processing.py  # Stage 2
+│   ├─ novel_analysis.py      # Stage 3
+│   ├─ vectorization.py       # Stage 4
+│   ├─ genre_verification.py  # Stage 5
+│   └─ overview_generation.py # Stage 6
+└─ utils/
+    ├─ retry_decorator.py
+    └─ progress_reporter.py
+```
+
+#### 7.3.2 Celery 配置
+
+```python
+# celery_app.py
+from celery import Celery
+
+app = Celery(
+    'screenplay_tool',
+    broker='redis://redis:6379/0',
+    backend='redis://redis:6379/1',
+    include=['app.workers.preprocessing']
+)
+
+app.conf.update(
+    # 任务路由：不同类型任务分配到不同队列
+    task_routes={
+        'preprocessing.chapter_*': {'queue': 'chapter_queue'},
+        'preprocessing.novel_*': {'queue': 'novel_queue'},
+        'preprocessing.vectorize_*': {'queue': 'vector_queue'},
+        'preprocessing.overview_*': {'queue': 'heavy_queue'},
+    },
+
+    # 并发控制
+    worker_concurrency=10,       # 默认每个 worker 10 并发
+    task_acks_late=True,         # 任务完成才 ack，崩溃可重试
+    task_reject_on_worker_lost=True,
+
+    # 限流：调 LLM API 防止超频
+    task_annotations={
+        'preprocessing.chapter_summarize': {'rate_limit': '20/m'},
+        'preprocessing.novel_analyze': {'rate_limit': '5/m'},
+    },
+
+    # 结果保留 24 小时
+    result_expires=86400,
+)
+```
+
+#### 7.3.3 任务依赖编排
+
+使用 Celery 的 `chord` + `group` + `chain` 表达依赖关系：
+
+```python
+# orchestrator.py
+from celery import chord, group, chain
+
+@app.task(bind=True, max_retries=3)
+def preprocess_novel(self, novel_id: str):
+    """预处理总入口"""
+    try:
+        pipeline = chain(
+            split_chapters_task.s(novel_id),   # Stage 1: 拆分（同步）
+            process_stages_2_to_4.s(),         # Stage 2-4: 复杂依赖，用 chord
+            verify_genre.s(),                  # Stage 5: 题材确认
+            generate_overview.s(),             # Stage 6: 概览版生成
+            finalize_preprocessing.s()         # 完成
+        )
+        result = pipeline.apply_async()
+        return result.id
+    except Exception as e:
+        # Pipeline 编排失败（不是任务本身失败）
+        update_novel_status(novel_id, 'preprocessing_failed', error=str(e))
+        raise
+
+
+@app.task
+def process_stages_2_to_4(novel_id: str):
+    """Stage 2-4 的复杂依赖编排"""
+    chapters = get_chapters(novel_id)
+
+    # Stage 2: 章节级任务并行（每章 3 个任务）
+    stage_2 = group(
+        group(
+            summarize_chapter.s(ch.id),
+            extract_key_events.s(ch.id),
+            segment_scenes.s(ch.id),
+        ) for ch in chapters
+    )
+
+    # Stage 2 完成后并行执行 Stage 3 和 Stage 4
+    workflow = chord(
+        stage_2,
+        group(
+            # Stage 3: 全书分析
+            group(
+                analyze_full_novel.s(novel_id),
+                analyze_character_arcs.s(novel_id),
+                build_foreshadowing_index.s(novel_id),
+            ),
+            # Stage 4: 向量化
+            vectorize_all_chunks.s(novel_id),
+        )
+    )
+    return workflow.apply_async()
+```
+
+> ⚠️ **实现注意点**：`process_stages_2_to_4` 处在 `chain` 中间却 `return workflow.apply_async()`，chain 不会等待内部 chord 完成就把控制权交给 `verify_genre`。落地时应改用 `self.replace(workflow)`（task 自我替换为子工作流）或把后续 Stage 作为 chord 的 callback，确保依赖真正串起来。详见 7.8。
+
+#### 7.3.4 通用重试 + Fallback 装饰器
+
+```python
+# utils/retry_decorator.py
+def with_retry_and_fallback(
+    max_retries: int = 3,
+    fallback_fn: Callable = None,
+    can_skip: bool = False
+):
+    """通用装饰器：失败重试 3 次，仍失败则 fallback 或跳过"""
+    def decorator(task_fn):
+        @functools.wraps(task_fn)
+        async def wrapper(self, *args, **kwargs):
+            last_error = None
+
+            for attempt in range(max_retries):
+                try:
+                    return await task_fn(self, *args, **kwargs)
+                except RetryableError as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)  # 指数退避
+                        continue
+                except NonRetryableError as e:
+                    # 不可重试的错误（如参数错误），直接 fallback
+                    last_error = e
+                    break
+
+            logger.warning(f"Task {task_fn.__name__} failed after {max_retries} retries")
+
+            # 尝试 fallback
+            if fallback_fn:
+                try:
+                    logger.info(f"Trying fallback for {task_fn.__name__}")
+                    result = await fallback_fn(*args, **kwargs)
+                    return {'data': result, 'used_fallback': True}
+                except Exception as e:
+                    logger.error(f"Fallback also failed: {e}")
+
+            # Fallback 也失败，决定是否跳过
+            if can_skip:
+                logger.warning(f"Skipping task {task_fn.__name__}")
+                return {'data': None, 'skipped': True, 'error': str(last_error)}
+            else:
+                raise last_error
+
+        return wrapper
+    return decorator
+```
+
+### 7.4 各 Stage 的具体任务定义
+
+#### 7.4.1 Stage 1：章节拆分
+
+```python
+@app.task(name='preprocessing.split_chapters')
+@with_retry_and_fallback(max_retries=3, can_skip=False)  # 不能跳过
+async def split_chapters_task(novel_id: str) -> dict:
+    """章节拆分（同步，不能跳过）"""
+    novel = await db.get_novel(novel_id)
+    raw_text = await storage.get_text(novel.original_text_url)
+
+    chapters = split_chapters(raw_text)
+    await db.bulk_insert_chapters(novel_id, chapters)
+
+    await push_progress(novel_id, stage='split', progress=100,
+                       message=f"已拆分 {len(chapters)} 章")
+    return {'chapter_count': len(chapters), 'novel_id': novel_id}
+```
+
+**为什么不能跳过**：章节拆分是后续所有任务的基础。失败必须告诉用户重试。
+
+#### 7.4.2 Stage 2：章节摘要（含 Fallback）
+
+```python
+@app.task(name='preprocessing.chapter_summarize')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=fallback_chapter_summary,
+    can_skip=True  # 单章可跳过
+)
+async def summarize_chapter(chapter_id: str) -> dict:
+    """生成章节摘要（500 字）"""
+    chapter = await db.get_chapter(chapter_id)
+
+    summary = await llm.generate(
+        prompt=load_prompt('preprocessing_agent', {
+            'task': 'chapter_summarize',
+            'chapter_content': chapter.content,
+            'word_count': 500
+        }),
+        max_tokens=800
+    )
+
+    await db.update_chapter(chapter_id, summary=summary)
+    await push_chapter_progress(chapter_id, 'summary_done')
+    return {'chapter_id': chapter_id, 'summary': summary}
+
+
+async def fallback_chapter_summary(chapter_id: str) -> str:
+    """Fallback：用前 500 字 + 末 200 字代替摘要"""
+    chapter = await db.get_chapter(chapter_id)
+    content = chapter.content
+
+    if len(content) <= 700:
+        fallback_summary = content
+    else:
+        fallback_summary = content[:500] + "...\n[中段省略]\n..." + content[-200:]
+
+    await db.update_chapter(
+        chapter_id,
+        summary=fallback_summary,
+        summary_quality='fallback'  # 标记为 fallback 质量
+    )
+    return fallback_summary
+```
+
+**关键点**：Fallback 后用 `summary_quality` 字段标记，下游任务知道这个摘要不可靠。
+
+#### 7.4.3 Stage 2：语义切片（含 Fallback）
+
+```python
+@app.task(name='preprocessing.segment_scenes')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=fallback_paragraph_split,
+    can_skip=True
+)
+async def segment_scenes(chapter_id: str) -> dict:
+    """语义切片：把章节切分为完整场景"""
+    chapter = await db.get_chapter(chapter_id)
+
+    scenes = await llm.generate_structured(
+        prompt=load_prompt('preprocessing_agent', {
+            'task': 'segment_scenes',
+            'chapter_content': chapter.content
+        }),
+        response_schema={
+            'scenes': [{
+                'scene_index': int,
+                'start_char': int,
+                'end_char': int,
+                'description': str,
+                'characters': [str]
+            }]
+        }
+    )
+
+    for scene in scenes['scenes']:
+        await db.insert_scene_in_novel({
+            'chapter_id': chapter_id,
+            'scene_index': scene['scene_index'],
+            'content': chapter.content[scene['start_char']:scene['end_char']],
+            'characters': scene['characters'],
+            'description': scene['description']
+        })
+
+    return {'chapter_id': chapter_id, 'scene_count': len(scenes['scenes'])}
+
+
+async def fallback_paragraph_split(chapter_id: str):
+    """Fallback：按段落硬切，每 5 段一个 chunk"""
+    chapter = await db.get_chapter(chapter_id)
+    paragraphs = chapter.content.split('\n\n')
+
+    chunks = []
+    for i in range(0, len(paragraphs), 5):
+        chunk_paragraphs = paragraphs[i:i+5]
+        chunks.append({
+            'content': '\n\n'.join(chunk_paragraphs),
+            'segmentation_quality': 'fallback'
+        })
+
+    for idx, chunk in enumerate(chunks):
+        await db.insert_scene_in_novel({
+            'chapter_id': chapter_id,
+            'scene_index': idx,
+            'content': chunk['content'],
+            'segmentation_quality': 'fallback'
+        })
+
+    return chunks
+```
+
+#### 7.4.4 Stage 3：全书分析（三个并行任务）
+
+```python
+@app.task(name='preprocessing.analyze_full_novel')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=fallback_simple_summary,
+    can_skip=False  # 全书摘要不能跳过
+)
+async def analyze_full_novel(novel_id: str) -> dict:
+    """生成全书摘要（500 字）"""
+    chapters = await db.get_chapters(novel_id)
+
+    all_summaries = '\n\n'.join([
+        f"第{ch.num}章 {ch.title}\n{ch.summary}"
+        for ch in chapters if ch.summary
+    ])
+
+    summary = await llm.generate(
+        prompt=load_prompt('preprocessing_agent', {
+            'task': 'novel_summary',
+            'chapter_summaries': all_summaries
+        }),
+        max_tokens=800
+    )
+
+    await db.update_novel(novel_id, summary=summary)
+    return {'novel_id': novel_id, 'summary': summary}
+
+
+@app.task(name='preprocessing.analyze_character_arcs')
+@with_retry_and_fallback(max_retries=3, can_skip=False)
+async def analyze_character_arcs(novel_id: str) -> dict:
+    """分析主角 + 主要配角的角色弧光"""
+    # Step 1: 识别主要角色（基于章节摘要中的出场频率）
+    main_characters = await identify_main_characters(novel_id)  # 5-15 个
+
+    # Step 2: 为每个角色构建弧光（并行调用）
+    arc_tasks = [build_character_arc.delay(novel_id, name) for name in main_characters]
+    arcs = await gather_celery_results(arc_tasks)
+
+    await db.update_novel(novel_id, character_arcs=arcs)
+    return {'novel_id': novel_id, 'character_count': len(arcs)}
+
+
+@app.task(name='preprocessing.build_foreshadowing_index')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=lambda novel_id: [],  # Fallback：空数组，不影响主流程
+    can_skip=True
+)
+async def build_foreshadowing_index(novel_id: str) -> dict:
+    """构建伏笔索引"""
+    chapters = await db.get_chapters(novel_id)
+    all_summaries = '\n\n'.join([f"第{ch.num}章: {ch.summary}" for ch in chapters])
+
+    foreshadowing = await llm.generate_structured(
+        prompt=load_prompt('preprocessing_agent', {
+            'task': 'find_foreshadowing',
+            'novel_content': all_summaries
+        }),
+        response_schema={
+            'pairs': [{
+                'setup_chapter': int,
+                'setup_description': str,
+                'payoff_chapters': [int],
+                'payoff_description': str
+            }]
+        }
+    )
+
+    await db.update_novel(novel_id, foreshadowing=foreshadowing)
+    return {'novel_id': novel_id, 'pair_count': len(foreshadowing['pairs'])}
+```
+
+#### 7.4.5 Stage 4：向量化（并行 chunk）
+
+```python
+@app.task(name='preprocessing.vectorize_all_chunks')
+async def vectorize_all_chunks(novel_id: str) -> dict:
+    """向量化所有 chunk（场景切片）"""
+    chunks = await db.get_scenes_in_novel(novel_id)
+
+    # 按 20 个 chunk 一批，并行向量化
+    batch_size = 20
+    tasks = []
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i+batch_size]
+        tasks.append(vectorize_batch.delay(novel_id, [c.id for c in batch]))
+
+    results = await gather_celery_results(tasks)
+    total_vectorized = sum(r['count'] for r in results)
+    return {'novel_id': novel_id, 'vectorized': total_vectorized}
+
+
+@app.task(name='preprocessing.vectorize_batch')
+@with_retry_and_fallback(max_retries=3, can_skip=True)
+async def vectorize_batch(novel_id: str, chunk_ids: list[str]) -> dict:
+    """向量化一批 chunk"""
+    chunks = await db.get_chunks_by_ids(chunk_ids)
+
+    # 调 BGE-M3 API
+    texts = [c.content for c in chunks]
+    embeddings = await embedding_service.embed_batch(texts)
+
+    # 写入 Chroma
+    await chroma_client.add(
+        collection_name=f'novel_{novel_id}_scenes',
+        ids=[c.id for c in chunks],
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=[{
+            'chapter_num': c.chapter_num,
+            'scene_index': c.scene_index,
+            'characters': c.characters
+        } for c in chunks]
+    )
+
+    await db.mark_chunks_vectorized(chunk_ids)
+    return {'count': len(chunks)}
+```
+
+#### 7.4.6 Stage 5：题材二次确认
+
+```python
+@app.task(name='preprocessing.verify_genre')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=lambda novel_id: {'verified': True},  # Fallback：默认信任用户选择
+    can_skip=True
+)
+async def verify_genre(novel_id: str) -> dict:
+    """AI 二次确认题材"""
+    novel = await db.get_novel(novel_id)
+    user_selected = novel.user_selected_genres  # 用户上传时选的
+
+    ai_result = await llm.generate_structured(
+        prompt=load_prompt('preprocessing_agent', {
+            'task': 'classify_genre',
+            'novel_summary': novel.summary,
+            'character_arcs': novel.character_arcs
+        }),
+        response_schema={
+            'predicted_genres': [str],
+            'confidence': float,  # 0-1
+            'reasoning': str
+        }
+    )
+
+    # 差异判断
+    overlap = set(user_selected) & set(ai_result['predicted_genres'])
+    needs_confirmation = (len(overlap) == 0 and ai_result['confidence'] > 0.8)
+
+    await db.update_novel(novel_id,
+        ai_predicted_genres=ai_result['predicted_genres'],
+        genre_confidence=ai_result['confidence'],
+        needs_genre_confirmation=needs_confirmation
+    )
+
+    if needs_confirmation:
+        await push_notification(novel_id, {
+            'type': 'genre_mismatch',
+            'user_selected': user_selected,
+            'ai_predicted': ai_result['predicted_genres'],
+            'reasoning': ai_result['reasoning']
+        })
+
+    return {'novel_id': novel_id, 'needs_confirmation': needs_confirmation}
+```
+
+#### 7.4.7 Stage 6：自动生成概览版
+
+```python
+@app.task(name='preprocessing.generate_overview')
+@with_retry_and_fallback(
+    max_retries=3,
+    fallback_fn=fallback_basic_overview,
+    can_skip=False
+)
+async def generate_overview(novel_id: str) -> dict:
+    """生成概览版剧本（免费送给用户）"""
+    novel = await db.get_novel(novel_id)
+    chapters = await db.get_chapters(novel_id)
+
+    # 调 generation_agent，但用 overview Schema
+    overview = await generation_agent.run(
+        novel=novel,
+        chapters=chapters,
+        schema_type='overview',
+        skill_name='skill_general'  # 概览版用通用 skill
+    )
+
+    screenplay_id = await db.create_screenplay({
+        'novel_id': novel_id,
+        'schema_type': 'overview',
+        'content': overview,
+        'is_auto_generated': True
+    })
+
+    return {'novel_id': novel_id, 'overview_id': screenplay_id}
+
+
+async def fallback_basic_overview(novel_id: str) -> dict:
+    """Fallback：用模板拼接出最基础的概览"""
+    novel = await db.get_novel(novel_id)
+    chapters = await db.get_chapters(novel_id)
+
+    basic_overview = {
+        'schema_version': 'overview-1.0',
+        'title': novel.title,
+        'logline': novel.summary[:100] if novel.summary else '暂无',
+        'estimated_episodes': len(chapters) // 2,  # 简单估算
+        'main_characters': [
+            {'name': c['name'], 'role': c['role'], 'one_liner': c.get('description', '')[:50]}
+            for c in (novel.character_arcs or [])[:5]
+        ],
+        'episodes': [
+            {
+                'episode_number': ch.num,
+                'title': ch.title,
+                'source_chapter': ch.title,
+                'one_line_summary': (ch.summary or '')[:100]
+            }
+            for ch in chapters[:10]  # 只列前 10 章
+        ],
+        'is_fallback': True
+    }
+
+    screenplay_id = await db.create_screenplay({
+        'novel_id': novel_id,
+        'schema_type': 'overview',
+        'content': basic_overview,
+        'is_auto_generated': True,
+        'quality': 'fallback'
+    })
+
+    return {'novel_id': novel_id, 'overview_id': screenplay_id}
+```
+
+### 7.5 进度推送给前端
+
+#### 7.5.1 推送策略
+
+每完成一个有意义的步骤就推送（与"生成一集推送一集"一致）。
+
+```python
+# utils/progress_reporter.py
+class ProgressReporter:
+    """统一的进度推送服务"""
+
+    async def push(self, novel_id: str, event: dict):
+        # 1. 持久化到数据库（用户重连时能恢复）
+        await db.insert_progress_event(novel_id, event)
+        # 2. 通过 WebSocket 推给在线用户
+        await websocket_manager.broadcast_to_novel(novel_id, event)
+```
+
+#### 7.5.2 推送事件类型
+
+```python
+PROGRESS_EVENTS = {
+    # Stage 1
+    'split_started':        {'stage': 'split', 'progress': 0},
+    'split_completed':      {'stage': 'split', 'progress': 100, 'chapter_count': int},
+    # Stage 2
+    'chapter_done':         {'stage': 'chapters', 'progress': int, 'chapter_num': int},
+    'chapter_failed':       {'stage': 'chapters', 'chapter_num': int, 'used_fallback': bool},
+    # Stage 3
+    'novel_summary_done':   {'stage': 'novel_analysis'},
+    'characters_done':      {'stage': 'novel_analysis', 'character_count': int},
+    'foreshadowing_done':   {'stage': 'novel_analysis', 'pair_count': int},
+    # Stage 4
+    'vectorize_progress':   {'stage': 'vectorize', 'progress': int},
+    # Stage 5
+    'genre_verified':       {'stage': 'genre', 'needs_confirmation': bool},
+    # Stage 6
+    'overview_done':        {'stage': 'overview', 'overview_id': str},
+    # 最终
+    'preprocessing_done':   {'stage': 'complete', 'duration_seconds': int},
+    'preprocessing_failed': {'stage': 'failed', 'error': str},
+}
+```
+
+#### 7.5.3 进度推送示例（章节处理）
+
+```python
+@app.task(name='preprocessing.chapter_done_callback')
+async def on_chapter_completed(chapter_id: str, results: list):
+    """单章节所有子任务（摘要/事件/切片）完成时调用"""
+    chapter = await db.get_chapter(chapter_id)
+    novel = await db.get_novel(chapter.novel_id)
+
+    completed = await db.count_completed_chapters(novel.id)
+    total = await db.count_total_chapters(novel.id)
+
+    used_fallback = any(r.get('used_fallback') for r in results)
+    skipped = any(r.get('skipped') for r in results)
+
+    await progress_reporter.push(novel.id, {
+        'type': 'chapter_done',
+        'chapter_num': chapter.num,
+        'chapter_title': chapter.title,
+        'progress': int(completed / total * 100),
+        'used_fallback': used_fallback,
+        'skipped': skipped,
+        'message': f"第 {chapter.num} 章处理完成 ({completed}/{total})"
+    })
+```
+
+#### 7.5.4 前端收到的事件序列示例
+
+```javascript
+// 用户上传红楼梦后，会陆续收到：
+
+{type: 'split_started', stage: 'split', progress: 0}
+{type: 'split_completed', stage: 'split', chapter_count: 80, progress: 100}
+
+// 章节处理并行进行，按完成顺序推送（不一定按章节号顺序）
+{type: 'chapter_done', chapter_num: 3, progress: 1, message: '第 3 章处理完成 (1/80)'}
+{type: 'chapter_done', chapter_num: 1, progress: 2, message: '第 1 章处理完成 (2/80)'}
+{type: 'chapter_done', chapter_num: 5, progress: 4, message: '第 5 章处理完成 (3/80)'}
+// ... 章节按完成顺序持续推送
+{type: 'chapter_failed', chapter_num: 47, used_fallback: true,
+ message: '第 47 章 AI 摘要失败，已使用简单截取替代'}
+{type: 'chapter_done', chapter_num: 80, progress: 100}
+
+// Stage 3 并行进行
+{type: 'novel_summary_done'}
+{type: 'characters_done', character_count: 12}
+{type: 'foreshadowing_done', pair_count: 28}
+
+// Stage 4
+{type: 'vectorize_progress', progress: 50}
+{type: 'vectorize_progress', progress: 100}
+
+// Stage 5
+{type: 'genre_verified', needs_confirmation: false}
+
+// Stage 6
+{type: 'overview_done', overview_id: 'sp_xxx'}
+
+// 全部完成
+{type: 'preprocessing_done', duration_seconds: 312}
+```
+
+### 7.6 断点续传
+
+任务可能因为各种原因中断（worker 重启、网络问题），需要支持续传。
+
+#### 7.6.1 状态持久化
+
+每个章节的处理状态独立存储：
+
+```sql
+ALTER TABLE chapters ADD COLUMN preprocessing_status JSONB DEFAULT '{
+  "summary": "pending",
+  "key_events": "pending",
+  "segmentation": "pending"
+}';
+
+-- 状态枚举：pending / processing / done / failed_retried / fallback / skipped
+```
+
+#### 7.6.2 续传逻辑
+
+```python
+@app.task
+async def preprocess_novel_resume(novel_id: str):
+    """续传：跳过已完成的步骤"""
+    novel = await db.get_novel(novel_id)
+
+    # 检查每个 Stage 状态
+    if novel.preprocessing_stages.get('split') != 'done':
+        await split_chapters_task.apply_async((novel_id,))
+
+    # Stage 2: 只处理未完成的章节
+    pending_chapters = await db.get_chapters_by_status(
+        novel_id,
+        status_filter={'summary': ['pending', 'failed']}
+    )
+    if pending_chapters:
+        await process_pending_chapters(pending_chapters)
+
+    # Stage 3-6: 同理检查状态后续传
+    # ...
+```
+
+### 7.7 错误监控与人工介入
+
+#### 7.7.1 全失败场景
+
+虽然有 fallback 和跳过，但有些情况必须告警：
+
+| 场景 | 处理 |
+|------|------|
+| 章节拆分完全失败 | 整个预处理失败，邮件/通知开发者 |
+| 超过 20% 章节使用了 fallback | 警告用户："此次预处理质量可能不佳" |
+| 全书摘要 fallback | 警告用户 |
+| 概览版生成失败 | 给用户提供"重试生成概览版"按钮 |
+
+#### 7.7.2 质量等级标记
+
+```python
+def calculate_preprocessing_quality(novel_id: str) -> str:
+    """计算预处理质量等级"""
+    chapters = await db.get_chapters(novel_id)
+
+    fallback_count = sum(1 for c in chapters if c.summary_quality == 'fallback')
+    skipped_count = sum(1 for c in chapters if c.preprocessing_status.get('skipped'))
+    total = len(chapters)
+
+    fallback_ratio = (fallback_count + skipped_count) / total
+
+    if fallback_ratio < 0.05:
+        return 'excellent'  # < 5%
+    elif fallback_ratio < 0.15:
+        return 'good'       # < 15%
+    elif fallback_ratio < 0.30:
+        return 'degraded'   # < 30%
+    else:
+        return 'poor'       # >= 30%
+```
+
+前端根据质量等级显示提示：
+
+- `excellent`：无提示
+- `good`：无提示
+- `degraded`：黄色提示"部分章节使用了简化处理"
+- `poor`：红色提示"预处理质量较差，建议重新上传或检查文本"
+
+### 7.8 实现注意点（待落地确认）
+
+整理讨论内容时发现以下几处需要在编码阶段确认，避免直接照搬伪代码：
+
+1. **Celery 任务与 `async def`**：`@app.task` 默认同步执行，包裹 `async def` 不会自动 `await`。需明确方案——每个 task 内 `asyncio.run(...)`、改用 `celery[gevent]`/`eventlet` 池，或干脆把任务体写成同步函数。`with_retry_and_fallback` 里的 `await` / `asyncio.sleep` 依赖此决策。
+2. **`chain` 中嵌套 `chord` 的等待问题**（见 7.3.3 警告）：`process_stages_2_to_4` 应用 `self.replace(workflow)` 替换自身，否则 `verify_genre` 会在 Stage 2-4 未完成时提前触发。
+3. **任务路由通配符对齐**：`task_routes` 里的 `preprocessing.chapter_*` 能匹配 `chapter_summarize`，但匹配不到 `split_chapters`（名字是 `preprocessing.split_chapters`）。路由 key 与任务 `name` 前缀需统一命名。
+4. **重试与 Celery 内建重试的关系**：装饰器自带 3 次重试，又与 `@app.task(max_retries=3)` / `task_acks_late` 并存，需确定单一重试来源，避免叠加成 9 次。
+5. **断点续传的状态查询**：`preprocessing_status` 用 JSONB 存子状态，`get_chapters_by_status` 需要 JSONB 查询（`->>`）配合 GIN 索引，或考虑拆为独立的任务状态表。
+
+---
+
+## 八、数据库设计
+
+### 8.1 PostgreSQL 表结构
 
 ```
 novels (小说)
@@ -619,7 +1522,7 @@ skills (技能包)
   └─ created_at
 ```
 
-### 7.2 Chroma Collection 设计
+### 8.2 Chroma Collection 设计
 
 ```
 collection: novel_{novel_id}_scenes
@@ -634,9 +1537,9 @@ collection: novel_{novel_id}_scenes
 
 ---
 
-## 八、生成流程设计
+## 九、生成流程设计
 
-### 8.1 完整用户流程
+### 9.1 完整用户流程
 
 ```
 [Step 1] 上传小说
@@ -683,7 +1586,7 @@ collection: novel_{novel_id}_scenes
 - 用户决策更明智：看过概览再选详细版类型，选错概率小
 - 部分用户可能只需要概览版，节省后续 token 消耗
 
-### 8.2 修改权限模型
+### 9.2 修改权限模型
 
 | 操作 | 执行方 |
 |------|--------|
@@ -706,7 +1609,7 @@ Agent：好的，我修改了第2集所有场景的对白。
        [画布已更新，请查看]
 ```
 
-### 8.3 流式生成的关键设计
+### 9.3 流式生成的关键设计
 
 **为什么流式优于并行**：
 
@@ -722,7 +1625,7 @@ Agent：好的，我修改了第2集所有场景的对白。
 - Worker 挂了重启后，从已完成的最后一集继续
 - 不要从头再来
 
-### 8.4 导出方案
+### 9.4 导出方案
 
 #### 8.4.1 支持的格式
 
@@ -828,11 +1731,11 @@ exporters/
 
 ---
 
-## 九、工程实现规范
+## 十、工程实现规范
 
 本章定义项目的工程实现细节，是后续编码的直接依据。
 
-### 9.1 Prompt 文件管理
+### 10.1 Prompt 文件管理
 
 **核心原则**：Prompt 与代码分离，文本文件管理，支持热更新。
 
@@ -894,7 +1797,7 @@ class PromptLoader:
 - 支持热更新（修改文件无需重启服务）
 - Git 版本控制友好
 
-### 9.2 Skill 系统实现
+### 10.2 Skill 系统实现
 
 #### 9.2.1 加载时机
 
@@ -967,7 +1870,7 @@ skills/
   └─ examples.yaml              # few-shot 改编案例
 ```
 
-### 9.3 Tool 基础架构
+### 10.3 Tool 基础架构
 
 #### 9.3.1 Base Schema 设计
 
@@ -1049,7 +1952,7 @@ class ToolRegistry:
 
 启动时统一注册所有工具，agent 通过 registry 调用。
 
-### 9.4 对话历史管理
+### 10.4 对话历史管理
 
 #### 9.4.1 数据模型
 
@@ -1164,7 +2067,7 @@ async def auto_title_conversation(conv_id: str):
 
 像 ChatGPT 那样，列表里显示"林黛玉对白优化"而不是"新对话"。
 
-### 9.5 API 路由设计
+### 10.5 API 路由设计
 
 #### 9.5.1 多用户隔离
 
@@ -1245,7 +2148,7 @@ server → client:
 - ✅ 正在执行的任务状态（必须，让用户看到 agent 还在工作）
 - ❌ 部分流式输出（不做，用户刷新页面即可）
 
-### 9.6 前端展示规范
+### 10.6 前端展示规范
 
 #### 9.6.1 工具调用展示
 
@@ -1273,7 +2176,7 @@ server → client:
 
 **不做全局开关**，保持 UI 简洁。
 
-### 9.7 项目文件结构
+### 10.7 项目文件结构
 
 ```
 backend/
@@ -1336,9 +2239,9 @@ backend/
 
 ---
 
-## 十、关键技术决策回顾
+## 十一、关键技术决策回顾
 
-### 10.1 已确定的决策清单
+### 11.1 已确定的决策清单
 
 | 决策点 | 选择 | 关键理由 |
 |--------|------|---------|
@@ -1385,7 +2288,7 @@ backend/
 | WebSocket 重连 | 恢复历史 + 任务状态，不恢复流式输出 | 简化实现，体验已足够 |
 | 工具调用展示 | 默认折叠，点击展开，无全局开关 | UI 简洁 |
 
-### 10.2 讨论中被否决的方案
+### 11.2 讨论中被否决的方案
 
 | 否决方案 | 否决理由 |
 |---------|---------|
@@ -1402,7 +2305,7 @@ backend/
 | 工具调用全局展开开关 | 增加 UI 复杂度，普通用户用不到 |
 | 简单截断式对话压缩 | 丢失头部需求与关键决策 |
 
-### 10.3 待回答的问题
+### 11.3 待回答的问题
 
 #### 关于 Schema（已决策 ✅）
 - ✅ AI 视频版的 `generation_prompt` 仅中文版
@@ -1446,9 +2349,9 @@ backend/
 
 ---
 
-## 十一、待办事项
+## 十二、待办事项
 
-### 11.1 下一步设计任务
+### 12.1 下一步设计任务
 
 按优先级排序，已完成项打 ✅：
 
@@ -1457,12 +2360,12 @@ backend/
 3. ✅ **RAG 与检索策略定型**（v1.1）
 4. ✅ **导出方案定型**（v1.1）
 5. ✅ **工程实现规范定型**（v1.2，含 Prompt/Skill/Tool/对话/路由）
-6. **预处理 Pipeline 的具体实现** ⭐ ← 下一步
-   - 章节拆分规则
-   - 多 agent 并行编排
-   - Celery 任务定义
-   - 失败重试与跳过逻辑
-7. **Agent System Prompt 模板编写**
+6. ✅ **预处理 Pipeline 的具体实现定型**（v1.3，见第七章；待编码阶段确认 7.8 实现注意点）
+   - ✅ 章节拆分规则
+   - ✅ 多 agent 并行编排（Celery chord/group/chain）
+   - ✅ Celery 任务定义（6 个 Stage）
+   - ✅ 失败重试与跳过逻辑（重试 + Fallback 装饰器）
+7. **Agent System Prompt 模板编写** ⭐ ← 下一步
    - 4 个 prompt 文件具体内容
 8. **数据库 DDL 最终版**
    - 所有约束、索引
@@ -1470,7 +2373,7 @@ backend/
 9. **前端 UI 设计**（用户后续提供）
 10. **Docker 部署配置**
 
-### 11.2 开发里程碑建议
+### 12.2 开发里程碑建议
 
 **Milestone 1：MVP（单 Schema 跑通）**
 - 选 1 套 Schema（建议编剧版）
