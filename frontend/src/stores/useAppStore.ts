@@ -37,9 +37,10 @@ import {
   setLastNovelId,
 } from '@/lib/novel-session'
 import {
-  applyProgressEvent,
-  formatProgressDetail,
+  applyProgressEventState,
+  createInitialProgressState,
   initialPreprocessStages,
+  reduceProgressEvents,
   type StageUiState,
 } from '@/lib/preprocess-stages'
 import {
@@ -53,6 +54,7 @@ import {
 
 let chatWsConn: ReturnType<typeof connectConversationWs> | null = null
 let progressWsConn: ReturnType<typeof connectNovelProgressWs> | null = null
+let progressWsNovelId: string | null = null
 
 function cloneEpisodes(map: Record<string, Episode[]>): Record<string, Episode[]> {
   return JSON.parse(JSON.stringify(map)) as Record<string, Episode[]>
@@ -82,6 +84,9 @@ interface AppState {
 
   preprocessStages: StageUiState[]
   preprocessDetail: string
+  preprocessStageDetails: Partial<Record<number, string>>
+  preprocessLastEventId: number
+  preprocessChapterProgress: { done: number; total: number } | null
   preprocessWsConnected: boolean
   preprocessDone: boolean
 
@@ -101,9 +106,13 @@ interface AppState {
   uploadAndPreprocess: (file: File, genres: string[]) => Promise<string | null>
   refreshNovel: (novelId: string) => Promise<void>
   deleteNovel: (novelId: string) => Promise<boolean>
-  startPreprocessWs: () => void
+  startPreprocessWs: () => Promise<void>
   stopPreprocessWs: () => void
-  applyPreprocessProgressEvent: (eventType: string, payload: Record<string, unknown>) => void
+  applyPreprocessProgressEvent: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    eventId?: number,
+  ) => void
 
   setCurrentNovel: (n: Novel | null) => void
   switchNovel: (novelId: string, options?: { quiet?: boolean }) => Promise<void>
@@ -217,6 +226,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   preprocessStages: initialPreprocessStages(),
   preprocessDetail: '',
+  preprocessStageDetails: {},
+  preprocessLastEventId: 0,
+  preprocessChapterProgress: null,
   preprocessWsConnected: false,
   preprocessDone: false,
 
@@ -270,6 +282,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         planConfirmed: false,
         preprocessStages: initialPreprocessStages(),
         preprocessDetail: '已上传，启动预处理…',
+        preprocessStageDetails: {},
+        preprocessLastEventId: 0,
+        preprocessChapterProgress: null,
         preprocessDone: false,
       }))
       await api.novels.preprocess(novel.id)
@@ -352,28 +367,70 @@ export const useAppStore = create<AppState>((set, get) => ({
     return true
   },
 
-  startPreprocessWs: () => {
+  startPreprocessWs: async () => {
     const novel = get().currentNovel
     if (!novel || !get().apiConnected) return
+    if (progressWsConn && progressWsNovelId === novel.id) return
+
     get().stopPreprocessWs()
+
+    let snapshot = createInitialProgressState()
+    snapshot.detail = '加载进度…'
+    try {
+      const events = await api.novels.progress(novel.id)
+      snapshot = reduceProgressEvents(
+        events.map((ev) => ({
+          id: ev.id,
+          eventType: ev.eventType,
+          payload: ev.payload,
+        })),
+      )
+    } catch {
+      snapshot.detail = '连接进度推送…'
+    }
+
     set({
-      preprocessStages: initialPreprocessStages(),
-      preprocessDetail: '连接进度推送…',
-      preprocessDone: false,
+      preprocessStages: snapshot.stages,
+      preprocessDetail: snapshot.detail || '等待预处理…',
+      preprocessStageDetails: snapshot.stageDetails,
+      preprocessLastEventId: snapshot.lastEventId,
+      preprocessChapterProgress: snapshot.chapterProgress,
+      preprocessDone: snapshot.done,
+      currentNovel: snapshot.done
+        ? novel.status !== 'ready_for_planning'
+          ? { ...novel, status: 'ready_for_planning' }
+          : novel
+        : novel.status === 'uploaded'
+          ? { ...novel, status: 'preprocessing' }
+          : novel,
     })
+
+    if (snapshot.done) {
+      void get().refreshNovel(novel.id)
+      return
+    }
+
+    progressWsNovelId = novel.id
     progressWsConn = connectNovelProgressWs(novel.id, {
       onOpen: () => set({ preprocessWsConnected: true }),
-      onClose: () => set({ preprocessWsConnected: false }),
+      onClose: () => {
+        set({ preprocessWsConnected: false })
+        progressWsNovelId = null
+      },
       onProgress: (msg) => {
-        get().applyPreprocessProgressEvent(msg.event_type, msg.payload ?? {})
+        get().applyPreprocessProgressEvent(msg.event_type, msg.payload ?? {}, msg.id)
       },
       onDone: () => {
-        set({ preprocessDone: true })
+        set((state) => ({
+          preprocessDone: true,
+          preprocessStages: state.preprocessStages.map(() => 'done' as StageUiState),
+          preprocessDetail: '预处理完成',
+          currentNovel: state.currentNovel
+            ? { ...state.currentNovel, status: 'ready_for_planning' }
+            : null,
+        }))
         const novelId = get().currentNovel?.id
-        // Reload screenplay + adaptation plan (not just the novel) so the
-        // auto-generated overview screenplay and its episode breakdown are
-        // available on the overview page without a manual page refresh.
-        if (novelId) void get().switchNovel(novelId)
+        if (novelId) void get().refreshNovel(novelId)
       },
     })
   },
@@ -381,25 +438,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   stopPreprocessWs: () => {
     progressWsConn?.close()
     progressWsConn = null
+    progressWsNovelId = null
     set({ preprocessWsConnected: false })
   },
 
-  applyPreprocessProgressEvent: (eventType, payload) => {
-    set((state) => ({
-      preprocessStages: applyProgressEvent(state.preprocessStages, eventType),
-      preprocessDetail: formatProgressDetail(eventType, payload),
-      currentNovel: state.currentNovel
-        ? {
-            ...state.currentNovel,
-            status:
-              eventType === 'preprocess_done'
-                ? 'ready_for_planning'
-                : eventType === 'preprocessing_failed'
-                  ? 'preprocessing_failed'
-                  : 'preprocessing',
-          }
-        : null,
-    }))
+  applyPreprocessProgressEvent: (eventType, payload, eventId) => {
+    set((state) => {
+      const next = applyProgressEventState(
+        {
+          stages: state.preprocessStages,
+          detail: state.preprocessDetail,
+          lastEventId: state.preprocessLastEventId,
+          done: state.preprocessDone,
+          failed: false,
+          chapterProgress: state.preprocessChapterProgress,
+          stageDetails: state.preprocessStageDetails,
+        },
+        eventType,
+        payload,
+        eventId,
+      )
+      return {
+        preprocessStages: next.stages,
+        preprocessDetail: next.detail,
+        preprocessStageDetails: next.stageDetails,
+        preprocessLastEventId: next.lastEventId,
+        preprocessChapterProgress: next.chapterProgress,
+        preprocessDone: next.done || state.preprocessDone,
+        currentNovel: state.currentNovel
+          ? {
+              ...state.currentNovel,
+              status:
+                next.done || eventType === 'preprocess_done'
+                  ? 'ready_for_planning'
+                  : eventType === 'preprocessing_failed'
+                    ? 'preprocessing_failed'
+                    : 'preprocessing',
+            }
+          : null,
+      }
+    })
   },
 
   setCurrentNovel: (n) => set({ currentNovel: n }),

@@ -28,11 +28,14 @@ export function PreprocessPage() {
     apiConnected,
     preprocessStages,
     preprocessDetail,
+    preprocessStageDetails,
     preprocessWsConnected,
     preprocessDone,
     startPreprocessWs,
     stopPreprocessWs,
   } = useAppStore()
+
+  const novelId = currentNovel?.id
 
   const states = apiConnected
     ? preprocessStages
@@ -41,12 +44,10 @@ export function PreprocessPage() {
       : stagesFromNovelStatus('preprocessing')
 
   useEffect(() => {
-    if (!apiConnected || !currentNovel) return
-    if (currentNovel.status === 'uploaded' || currentNovel.status === 'preprocessing') {
-      startPreprocessWs()
-    }
+    if (!apiConnected || !novelId) return
+    void startPreprocessWs()
     return () => stopPreprocessWs()
-  }, [apiConnected, currentNovel?.id, currentNovel?.status, startPreprocessWs, stopPreprocessWs])
+  }, [apiConnected, novelId, startPreprocessWs, stopPreprocessWs])
 
   const canContinue = currentNovel?.status === 'ready_for_planning' || preprocessDone
 
@@ -56,7 +57,7 @@ export function PreprocessPage() {
         title="预处理进度"
         description={
           currentNovel
-            ? `《${currentNovel.title}》· ${apiConnected ? (preprocessWsConnected ? 'WebSocket 已连接' : '连接中…') : 'mock 状态映射'}`
+            ? `《${currentNovel.title}》· ${apiConnected ? (preprocessWsConnected ? '实时进度已连接' : '同步进度中…') : 'mock 状态映射'}`
             : '请先上传小说'
         }
         actions={
@@ -81,6 +82,13 @@ export function PreprocessPage() {
                   <ul className="flex flex-col">
                     {PREPROCESS_STAGE_DEFS.map((s, i) => {
                       const state = states[i]
+                      const liveDetail = preprocessStageDetails[i]
+                      const desc =
+                        state === 'running' && liveDetail
+                          ? liveDetail
+                          : state === 'done' && liveDetail
+                            ? liveDetail
+                            : PREPROCESS_STAGE_DESC[s.descKey]
                       return (
                         <li
                           key={s.name}
@@ -94,9 +102,7 @@ export function PreprocessPage() {
                             <div className="text-sm font-medium">
                               Stage {i + 1} · {s.name}
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              {PREPROCESS_STAGE_DESC[s.descKey]}
-                            </p>
+                            <p className="text-xs text-muted-foreground">{desc}</p>
                           </div>
                         </li>
                       )
