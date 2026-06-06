@@ -126,6 +126,8 @@ interface AppState {
   setActiveEpisode: (id: string) => void
   getActiveEpisode: () => Episode | undefined
   getEpisodes: () => Episode[]
+  /** 顺序依赖检查：返回阻挡本集生成的最早未完成前序集号，无阻挡则 null */
+  getEpisodeBlocker: (episodeId: string) => number | null
 
   updateScene: (episodeId: string, sceneId: string, patch: Partial<Scene>) => void
   updateDialogue: (
@@ -780,6 +782,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     return episodesByScreenplay[currentScreenplay.id] ?? []
   },
 
+  getEpisodeBlocker: (episodeId) => {
+    const episodes = get().getEpisodes()
+    const target = episodes.find((e) => e.id === episodeId)
+    if (!target) return null
+    // 剧集顺序依赖：每集依据前一集累积的剧情记忆（screenplay_memory）生成，
+    // 因此所有更早的剧集必须已 done 才能生成本集。
+    const blocker = episodes
+      .filter((e) => e.episodeNum < target.episodeNum && e.status !== 'done')
+      .sort((a, b) => a.episodeNum - b.episodeNum)[0]
+    return blocker ? blocker.episodeNum : null
+  },
+
   updateScene: (episodeId, sceneId, patch) => {
     set((state) => {
       const screenplayId = state.currentScreenplay?.id
@@ -1131,6 +1145,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       (e) => e.id === episodeId,
     )
     if (existing?.status === 'generating') return
+    // 剧集顺序依赖：前序集未生成完时不能启动本集，否则 agent 读到的剧情记忆
+    // 缺少前一集，生成结果不连贯。
+    const blockerNum = get().getEpisodeBlocker(episodeId)
+    if (blockerNum !== null) {
+      set({
+        globalError: `第 ${existing?.episodeNum} 集需在第 ${blockerNum} 集生成完成后才能生成（剧集按顺序依赖前文）`,
+      })
+      return
+    }
 
     const patchEpisode = (updater: (ep: Episode) => Episode) =>
       set((state) => ({
@@ -1186,6 +1209,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       for (const ep of pending) {
         await get().generateEpisode(ep.id)
+        // 顺序依赖：本集未成功 done 时停止，避免后续集基于缺失的前文生成。
+        const updated = (get().episodesByScreenplay[screenplayId] ?? []).find(
+          (e) => e.id === ep.id,
+        )
+        if (updated?.status !== 'done') break
       }
     } finally {
       set({ generatingAll: false })

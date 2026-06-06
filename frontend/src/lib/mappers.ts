@@ -215,7 +215,7 @@ function mapShot(raw: Record<string, unknown>, index: number): Shot {
           : d.character
             ? String(d.character)
             : undefined,
-        line: String(d.line ?? d.text ?? ''),
+        line: mapDialogueLine(d),
         voiceTone: d.voice_tone ? String(d.voice_tone) : undefined,
       }))
       .filter((d) => d.line),
@@ -256,25 +256,50 @@ function shotToJson(shot: Shot): Record<string, unknown> {
 }
 
 function mapScene(raw: Record<string, unknown>, index: number): Scene {
-  const dialoguesRaw = (raw.dialogues as Record<string, unknown>[]) ?? []
+  // 编剧 agent 输出用单数 `dialogue`（{speaker,line,subtext}）；旧版/编辑器
+  // 用复数 `dialogues`（{character,line,parenthetical}）。两者都要兼容。
+  const dialoguesRaw =
+    (raw.dialogues as Record<string, unknown>[]) ??
+    (raw.dialogue as Record<string, unknown>[]) ??
+    []
   const shotsRaw = (raw.shots as Record<string, unknown>[]) ?? []
   const hasShots = Array.isArray(shotsRaw) && shotsRaw.length > 0
   return {
     id: String(raw.id ?? raw.scene_id ?? `scene-${index}`),
-    heading: String(raw.heading ?? raw.slug_line ?? ''),
+    // 编剧 agent 把 slug line 放在 `setting`
+    heading: String(raw.heading ?? raw.slug_line ?? raw.setting ?? ''),
     action: String(raw.action ?? raw.action_description ?? ''),
     dialogues: dialoguesRaw.map((d, i) => mapDialogue(d, i)),
-    // AI 视频版：场景内是分镜。映射出来用于展示，并保留原始 JSON 以便无损回写。
-    ...(hasShots ? { shots: shotsRaw.map((s, i) => mapShot(s, i)), raw } : {}),
+    // 保留原始 JSON，使编辑回写时不丢 agent 字段
+    // （objective/characters/rewrite_notes/source_text_excerpt 等）。
+    raw,
+    // AI 视频版：场景内是分镜。映射出来用于展示。
+    ...(hasShots ? { shots: shotsRaw.map((s, i) => mapShot(s, i)) } : {}),
   }
+}
+
+function mapDialogueLine(raw: Record<string, unknown>): string {
+  if (typeof raw.line === 'string' && raw.line.trim()) return raw.line
+  if (typeof raw.text === 'string' && raw.text.trim()) return raw.text
+  if (typeof raw.dialogue === 'string' && raw.dialogue.trim()) return raw.dialogue
+  if (typeof raw.content === 'string' && raw.content.trim()) return raw.content
+  if (Array.isArray(raw.lines)) {
+    return raw.lines.map((l) => String(l).trim()).filter(Boolean).join('\n')
+  }
+  return String(raw.line ?? raw.text ?? '')
 }
 
 function mapDialogue(raw: Record<string, unknown>, index: number): SceneDialogue {
   return {
     id: String(raw.id ?? `dlg-${index}`),
-    character: String(raw.character ?? raw.speaker ?? ''),
-    line: String(raw.line ?? raw.text ?? ''),
-    parenthetical: raw.parenthetical ? String(raw.parenthetical) : undefined,
+    character: String(raw.character ?? raw.speaker ?? raw.name ?? ''),
+    line: mapDialogueLine(raw),
+    // 编剧 agent 用 `subtext`（潜台词）替代 parenthetical
+    parenthetical: raw.parenthetical
+      ? String(raw.parenthetical)
+      : raw.subtext
+        ? String(raw.subtext)
+        : undefined,
   }
 }
 
@@ -299,11 +324,15 @@ export function toEpisodeContentPayload(
       if (s.shots) {
         return { ...(s.raw ?? {}), id: s.id, shots: s.shots.map(shotToJson) }
       }
+      // 合并原始 JSON，保留 agent 字段（objective/characters/rewrite_notes/
+      // source_text_excerpt 等），并把编辑同时写回两套命名以兼容前后端。
       return {
+        ...(s.raw ?? {}),
         id: s.id,
         scene_number: i + 1,
         heading: s.heading,
         slug_line: s.heading,
+        setting: s.heading,
         action: s.action,
         action_description: s.action,
         dialogues: s.dialogues.map((d) => ({
@@ -311,6 +340,11 @@ export function toEpisodeContentPayload(
           character: d.character,
           line: d.line,
           parenthetical: d.parenthetical,
+        })),
+        dialogue: s.dialogues.map((d) => ({
+          speaker: d.character,
+          line: d.line,
+          subtext: d.parenthetical,
         })),
       }
     }),

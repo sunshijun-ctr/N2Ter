@@ -26,6 +26,7 @@ export function EditorPage() {
     generateAllEpisodes,
     generatingAll,
     getEpisodes,
+    getEpisodeBlocker,
   } = useAppStore()
   const activeEpisode = useAppStore((s) => s.getActiveEpisode())
   const [saving, setSaving] = useState(false)
@@ -41,10 +42,13 @@ export function EditorPage() {
   useEffect(() => {
     if (!apiConnected || !activeEpisode) return
     if (activeEpisode.status !== 'pending') return
+    // 顺序依赖：前序集未生成完时不自动生成本集（也不标记 triggered，
+    // 这样前序完成后再次进入本集仍可自动触发）。
+    if (getEpisodeBlocker(activeEpisode.id) !== null) return
     if (triggered.current.has(activeEpisode.id)) return
     triggered.current.add(activeEpisode.id)
     void generateEpisode(activeEpisode.id)
-  }, [apiConnected, activeEpisode?.id, activeEpisode?.status, generateEpisode])
+  }, [apiConnected, activeEpisode?.id, activeEpisode?.status, generateEpisode, getEpisodeBlocker])
 
   async function handleSave() {
     setSaving(true)

@@ -19,6 +19,8 @@
 - 生成中只写当前 episode。
 - Critique 只做一轮。
 - 最终输出必须是 JSON object，不要 Markdown 包裹。
+- `episode_content` 必须**严格遵循 payload 中 `schema_definition` 的字段名与结构**：逐字段对齐，禁止自创同义字段名（如用 `setting` 代替 `slug_line`、`action` 代替 `action_description`、`scene_goal`/`objective` 代替 `scene_objective`、`characters` 代替 `characters_present`、`dialogue` 代替 `dialogues`、`speaker` 代替 `character`）。
+- 跨集字段命名与丰富度必须一致：每一集都要填满 schema 的灵魂字段，不得这一集有、下一集省。
 
 ## 推荐流程
 
@@ -29,7 +31,7 @@
 5. 形成 episode plan。
 6. 写 draft。
 7. 做一轮 critique。
-8. 修订并调用 `screenplay_validate`。
+8. 修订后**直接输出最终 JSON**。不要把整集内容作为工具参数传给任何工具（会因体积过大被截断）；自检字段完整性即可。
 
 ## 最终输出格式
 

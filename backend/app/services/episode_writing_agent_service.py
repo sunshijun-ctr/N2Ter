@@ -39,7 +39,8 @@ _GENERATION_TOOL_ALLOWLIST = {
     "screenplay_memory_get",
     "episode_get",
     "episode_context",
-    "screenplay_validate",
+    # screenplay_validate 故意不在列：它只做 isinstance 校验却逼模型把整集
+    # 内容塞进工具参数，复杂集会在 max_tokens 处截断，导致工具参数 JSON 不完整。
 }
 
 
@@ -217,6 +218,12 @@ class EpisodeWritingAgentService:
             "episode_num": episode.episode_num,
             "source_chapters": episode.source_chapters or [],
             "schema_type": screenplay.schema_type.value,
+            # The exact target field spec. Without this the model invents its own
+            # field names per episode (objective vs scene_goal, characters vs
+            # characters_present, dropping subtext), producing inconsistent output.
+            "schema_definition": generation_service._schema_definition(
+                screenplay.schema_type.value
+            ),
             "adaptation_plan_locked": True,
             "adaptation_plan": screenplay.adaptation_plan or {},
             "style_preferences": screenplay.style_preferences or {},
@@ -263,22 +270,39 @@ class EpisodeWritingAgentService:
             for call in calls:
                 name = (call.get("function") or {}).get("name", "")
                 raw_args = (call.get("function") or {}).get("arguments") or "{}"
-                args = self._loads(raw_args)
                 total_tool_calls += 1
                 tool_counts[name] = tool_counts.get(name, 0) + 1
-                if (
-                    total_tool_calls > self.max_tool_calls
-                    or tool_counts[name] > self.max_tool_calls_per_tool
-                ):
+                try:
+                    args = self._loads(raw_args)
+                except LLMError:
+                    # Truncated/invalid tool arguments — usually the model inlined
+                    # a huge object (e.g. the whole episode) and hit the token
+                    # limit. Surface as a recoverable tool error so the agent can
+                    # adjust, instead of failing the entire episode.
+                    args = {}
                     result = {
                         "status": "failed",
-                        "error": "tool budget exceeded",
+                        "error": (
+                            "tool arguments were not valid JSON (likely truncated); "
+                            "do not pass large objects as tool arguments"
+                        ),
                         "data": None,
                         "metadata": {"tool": name},
                     }
                 else:
-                    tool_result = await tool_registry.execute(name, args, ctx)
-                    result = tool_result.model_dump()
+                    if (
+                        total_tool_calls > self.max_tool_calls
+                        or tool_counts[name] > self.max_tool_calls_per_tool
+                    ):
+                        result = {
+                            "status": "failed",
+                            "error": "tool budget exceeded",
+                            "data": None,
+                            "metadata": {"tool": name},
+                        }
+                    else:
+                        tool_result = await tool_registry.execute(name, args, ctx)
+                        result = tool_result.model_dump()
                 trace.append(
                     {
                         "step_index": step_index,

@@ -1,37 +1,52 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
 type AutoTextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   minRows?: number
 }
 
-/** 高度随内容增长，避免窄框内反复下拉 */
+const fieldBase =
+  'block w-full min-w-0 resize-none overflow-hidden bg-transparent px-1 py-1.5 text-sm leading-relaxed outline-none border-b border-border/20 transition-colors hover:border-border/40 focus:border-primary/50'
+
+/** 全宽展示，高度随内容增长 */
 export function AutoTextarea({
   className,
   value,
-  minRows = 2,
+  minRows = 1,
   onChange,
   ...props
 }: AutoTextareaProps) {
   const ref = useRef<HTMLTextAreaElement>(null)
 
-  useEffect(() => {
+  const syncHeight = useCallback(() => {
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.max(el.scrollHeight, minRows * 24)}px`
-  }, [value, minRows])
+  }, [minRows])
+
+  useEffect(() => {
+    syncHeight()
+  }, [value, syncHeight])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(() => syncHeight())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [syncHeight])
 
   return (
     <textarea
       ref={ref}
       value={value}
-      onChange={onChange}
+      onChange={(e) => {
+        onChange?.(e)
+        requestAnimationFrame(syncHeight)
+      }}
       rows={minRows}
-      className={cn(
-        'w-full min-w-0 resize-none overflow-hidden rounded-md border bg-background px-3 py-2 text-sm leading-relaxed outline-none focus:border-primary [field-sizing:content]',
-        className,
-      )}
+      className={cn(fieldBase, className)}
       {...props}
     />
   )
