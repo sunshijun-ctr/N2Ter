@@ -3,7 +3,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.models.enums import NovelStatus
-from app.schemas.common import Timestamped
+from app.schemas.common import ORMModel, Timestamped
 
 
 class NovelCreate(BaseModel):
@@ -42,3 +42,15 @@ class ChapterRead(Timestamped):
     summary: str | None = None
     special_type: str | None = None
     needs_sub_split: bool = False
+
+
+class SceneInNovelRead(ORMModel):
+    id: UUID
+    novel_id: UUID
+    chapter_id: UUID
+    scene_index: int
+    content: str
+    description: str | None = None
+    characters: list[dict] = []
+    vector_id: str | None = None
+    vectorized: bool = False

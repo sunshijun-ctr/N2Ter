@@ -5,10 +5,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import Chapter, Novel, NovelStatus, Task, TaskStatus, TaskType
-from app.schemas import ChapterRead, NovelCreate, NovelListItem, NovelRead, TaskRef
+from app.models import Chapter, Novel, NovelStatus, SceneInNovel, TaskStatus, TaskType
+from app.schemas import (
+    ChapterRead,
+    NovelCreate,
+    NovelListItem,
+    NovelRead,
+    ProgressEventRead,
+    SceneInNovelRead,
+    TaskRef,
+)
 from app.services.chapter_splitter import split_chapters
+from app.services.preprocessing_service import preprocessing_service
 from app.services.storage_service import storage_service
+from app.services.task_service import task_service
 
 router = APIRouter(prefix="/novels", tags=["novels"])
 
@@ -81,6 +91,27 @@ async def get_chapter(
     return chapter
 
 
+@router.get("/{novel_id}/scenes", response_model=list[SceneInNovelRead])
+async def list_scenes(
+    novel_id: UUID,
+    chapter_num: int | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[SceneInNovel]:
+    novel = await db.get(Novel, novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    statement = (
+        select(SceneInNovel)
+        .join(Chapter, Chapter.id == SceneInNovel.chapter_id)
+        .where(SceneInNovel.novel_id == novel_id)
+        .order_by(Chapter.chapter_num.asc(), SceneInNovel.scene_index.asc())
+    )
+    if chapter_num is not None:
+        statement = statement.where(Chapter.chapter_num == chapter_num)
+    result = await db.execute(statement)
+    return list(result.scalars())
+
+
 @router.delete("/{novel_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_novel(novel_id: UUID, db: AsyncSession = Depends(get_db)) -> None:
     novel = await db.get(Novel, novel_id)
@@ -95,13 +126,41 @@ async def start_preprocess(novel_id: UUID, db: AsyncSession = Depends(get_db)) -
     novel = await db.get(Novel, novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-    task = Task(
+    chapters_result = await db.execute(select(Chapter).where(Chapter.novel_id == novel_id))
+    chapters = list(chapters_result.scalars())
+    task = await task_service.create_task(
+        db,
         task_type=TaskType.preprocess,
-        status=TaskStatus.pending,
+        status=TaskStatus.running,
+        progress=10,
         novel_id=novel_id,
     )
+    await task_service.record_progress(
+        db,
+        novel_id,
+        "preprocess_started",
+        {"task_id": str(task.id)},
+    )
+    await task_service.record_progress(
+        db,
+        novel_id,
+        "split_completed",
+        {"chapter_count": len(chapters)},
+    )
     novel.status = NovelStatus.preprocessing
+    novel.preprocessing_stages = {**(novel.preprocessing_stages or {}), "split": "done"}
+    await preprocessing_service.run_fallback_preprocess(db, novel, task, chapters)
     db.add(task)
     await db.commit()
     await db.refresh(task)
     return TaskRef(task_id=task.id, status=task.status)
+
+
+@router.get("/{novel_id}/progress", response_model=list[ProgressEventRead])
+async def list_progress_events(
+    novel_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    novel = await db.get(Novel, novel_id)
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+    return await task_service.list_progress_events(db, novel_id)

@@ -1,7 +1,8 @@
 from uuid import UUID
+from datetime import datetime
 
 from app.models.enums import TaskStatus, TaskType
-from app.schemas.common import Timestamped
+from app.schemas.common import ORMModel, Timestamped
 
 
 class TaskRead(Timestamped):
@@ -14,3 +15,11 @@ class TaskRead(Timestamped):
     progress: int
     error_message: str | None = None
     retry_count: int
+
+
+class ProgressEventRead(ORMModel):
+    id: int
+    novel_id: UUID
+    event_type: str
+    payload: dict
+    created_at: datetime

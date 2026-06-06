@@ -1,10 +1,10 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.enums import ConversationContext, MessageRole
-from app.schemas.common import Timestamped
+from app.schemas.common import ORMModel, Timestamped
 
 
 class ConversationCreate(BaseModel):
@@ -22,8 +22,9 @@ class ConversationRead(Timestamped):
     screenplay_id: UUID | None = None
 
 
-class MessageRead(BaseModel):
+class MessageRead(ORMModel):
     id: UUID
+    conversation_id: UUID
     role: MessageRole
     content: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
@@ -31,3 +32,23 @@ class MessageRead(BaseModel):
     token_usage: dict[str, Any] | None = None
     is_pinned: bool = False
     is_compressed: bool = False
+
+
+class MessageCreate(BaseModel):
+    role: MessageRole = MessageRole.user
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_results: list[dict[str, Any]] | None = None
+    token_usage: dict[str, Any] | None = None
+    is_pinned: bool = False
+
+
+class ConversationCompressRequest(BaseModel):
+    keep_recent: int = Field(default=4, ge=0, le=50)
+
+
+class CompressedSegmentRead(ORMModel):
+    id: UUID
+    conversation_id: UUID
+    summary: str
+    original_message_ids: list[UUID]

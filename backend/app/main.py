@@ -34,6 +34,17 @@ app.include_router(api_router, prefix=settings.api_prefix)
 app.include_router(websocket_router)
 
 
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {
+        "service": settings.app_name,
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
+        "database_health": "/health/db",
+    }
+
+
 @app.get("/health", response_model=APIHealth)
 async def health() -> APIHealth:
     return APIHealth(service=settings.app_name)

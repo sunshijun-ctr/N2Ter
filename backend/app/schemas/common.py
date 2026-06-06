@@ -15,6 +15,10 @@ class TaskRef(BaseModel):
     status: str
 
 
+class EpisodeTaskRef(TaskRef):
+    episode_id: UUID
+
+
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

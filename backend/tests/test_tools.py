@@ -37,6 +37,20 @@ async def _assert_registered_context_tools_query_database() -> None:
     assert foreshadowing_result.status == "success"
     assert foreshadowing_result.data[0]["setup"] == "玉佩发光"
 
+    episode_id = await _seed_screenplay_episode(novel_id)
+    generation_result = await tool_registry.get("text2screenplay").run(
+        {"episode_id": episode_id}, ToolContext(novel_id=novel_id, episode_id=episode_id)
+    )
+    assert generation_result.status == "success"
+    assert generation_result.data["scenes"]
+
+    patch_result = await tool_registry.get("episode_patch").run(
+        {"episode_id": episode_id, "instruction": "强化人物动机"},
+        ToolContext(novel_id=novel_id, episode_id=episode_id),
+    )
+    assert patch_result.status == "success"
+    assert patch_result.data["content"]["revision_notes"][0]["instruction"] == "强化人物动机"
+
 
 async def _seed_context_data() -> str:
     dsn = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://")
@@ -95,3 +109,26 @@ async def _seed_context_data() -> str:
     )
     await conn.close()
     return str(novel_id)
+
+
+async def _seed_screenplay_episode(novel_id: str) -> str:
+    dsn = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://")
+    conn = await asyncpg.connect(dsn)
+    screenplay_id = await conn.fetchval(
+        """
+        INSERT INTO screenplays (novel_id, schema_type, adaptation_plan, style_preferences, status)
+        VALUES ($1, 'screenwriter', '{}'::jsonb, '{}'::jsonb, 'planning')
+        RETURNING id;
+        """,
+        novel_id,
+    )
+    episode_id = await conn.fetchval(
+        """
+        INSERT INTO episodes (screenplay_id, episode_num, title, source_chapters, content, status)
+        VALUES ($1, 1, '第 1 集', ARRAY[1], '{}'::jsonb, 'pending')
+        RETURNING id;
+        """,
+        screenplay_id,
+    )
+    await conn.close()
+    return str(episode_id)

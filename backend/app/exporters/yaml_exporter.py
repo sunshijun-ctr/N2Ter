@@ -1,7 +1,8 @@
-import json
 from typing import Any
+
+import yaml
 
 
 class YAMLExporter:
     def render(self, content: dict[str, Any]) -> str:
-        return json.dumps(content, ensure_ascii=False, indent=2)
+        return yaml.safe_dump(content, allow_unicode=True, sort_keys=False)
