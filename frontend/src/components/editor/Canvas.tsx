@@ -1,8 +1,9 @@
-import { MessageSquarePlus, Plus, Trash2 } from 'lucide-react'
+import { Loader2, MessageSquarePlus, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/stores/useAppStore'
 import type { Scene } from '@/lib/types'
+import { formatSourceChapters } from '@/lib/utils'
 
 function SceneEditor({
   episodeId,
@@ -123,7 +124,7 @@ function SceneEditor({
 }
 
 export function Canvas() {
-  const { getActiveEpisode, addScene } = useAppStore()
+  const { getActiveEpisode, addScene, generateEpisode, apiConnected } = useAppStore()
   const episode = getActiveEpisode()
 
   if (!episode) {
@@ -134,10 +135,7 @@ export function Canvas() {
     )
   }
 
-  const chapterLabel =
-    episode.sourceChapters.length === 1
-      ? `第 ${episode.sourceChapters[0]} 章`
-      : `第 ${episode.sourceChapters[0]}–${episode.sourceChapters.at(-1)} 章`
+  const chapterLabel = formatSourceChapters(episode.sourceChapters)
 
   const scenes = episode.content.scenes ?? []
 
@@ -148,16 +146,29 @@ export function Canvas() {
           <h2 className="text-lg font-semibold">
             第 {episode.episodeNum} 集 · {episode.title}
           </h2>
-          <p className="text-xs text-muted-foreground">源章节：{chapterLabel}</p>
+          {chapterLabel && (
+            <p className="text-xs text-muted-foreground">源章节：{chapterLabel}</p>
+          )}
           <p className="mt-1 text-xs text-primary">
             画布即 source of truth · 可手动增删场景与对白
           </p>
         </div>
 
         <div className="flex flex-col gap-4">
-          {scenes.length === 0 ? (
+          {episode.status === 'generating' ? (
             <div className="rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
-              本集暂无场景
+              <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-primary" />
+              AI 正在生成本集初稿…
+            </div>
+          ) : scenes.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
+              <span>{episode.status === 'failed' ? '本集生成失败' : '本集暂无内容'}</span>
+              {apiConnected && (
+                <Button size="sm" onClick={() => void generateEpisode(episode.id)}>
+                  <Sparkles className="h-4 w-4" />
+                  {episode.status === 'failed' ? '重新生成本集' : 'AI 生成本集'}
+                </Button>
+              )}
             </div>
           ) : (
             scenes.map((scene, i) => (
@@ -170,22 +181,18 @@ export function Canvas() {
             ))
           )}
 
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full border-dashed"
-            onClick={() => addScene(episode.id)}
-          >
-            <Plus className="h-4 w-4" />
-            添加场景
-          </Button>
+          {episode.status !== 'generating' && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full border-dashed"
+              onClick={() => addScene(episode.id)}
+            >
+              <Plus className="h-4 w-4" />
+              添加场景
+            </Button>
+          )}
         </div>
-
-        {episode.status === 'pending' && (
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            该集尚未生成，内容仅为占位
-          </p>
-        )}
       </div>
     </div>
   )

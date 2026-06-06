@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     embedding_model: str = "bge-m3"
     embedding_dim: int = 1024
     embedding_timeout_seconds: float = 60.0
+    # Max texts per /embeddings request. Providers cap this (DashScope: 25 for
+    # v1/v2, 10 for v3). We chunk larger batches to stay under the limit.
+    embedding_batch_size: int = 10
 
     # ----- Rerank (BGE-reranker style HTTP endpoint) -----
     rerank_url: str = ""

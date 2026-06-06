@@ -1,19 +1,33 @@
+import re
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Episode, EpisodeStatus, Screenplay
 
+_CHAPTER_REF = re.compile(r"第\s*(\d+)\s*章")
+
 
 def _as_chapter_nums(raw) -> list[int]:
-    """Coerce a plan's ``source_chapters`` to integer chapter numbers, skipping
-    anything that isn't numeric (e.g. chapter-title strings carried over from the
-    overview document) instead of raising and 500-ing the request."""
+    """Coerce a plan's ``source_chapters`` into integer chapter numbers.
+
+    Entries may be ints, digit strings, or free-text chapter references carried
+    over from the overview document (e.g. ``"第1章 正文前言, 第3章 人生总有惊喜"``).
+    We extract every ``第N章`` number from such strings so episodes still get a
+    usable chapter range to generate from. Order is preserved, duplicates dropped.
+    """
     nums: list[int] = []
     for chapter in raw or []:
-        try:
-            nums.append(int(chapter))
-        except (TypeError, ValueError):
+        if isinstance(chapter, bool):
             continue
-    return nums
+        if isinstance(chapter, int):
+            nums.append(chapter)
+        elif isinstance(chapter, str):
+            matches = _CHAPTER_REF.findall(chapter)
+            if not matches and chapter.strip().isdigit():
+                matches = [chapter.strip()]
+            nums.extend(int(m) for m in matches)
+    seen: set[int] = set()
+    return [n for n in nums if not (n in seen or seen.add(n))]
 
 
 class ScreenplayService:

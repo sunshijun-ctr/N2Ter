@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { FileArchive, FileCode2, FileText, X } from 'lucide-react'
+import { Download, FileArchive, FileCode2, FileText, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/ui/loading'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/useAppStore'
-import type { ExportFormat } from '@/lib/types'
+import type { ExportFormat, ExportResult } from '@/lib/types'
 
 const formats: {
   value: ExportFormat
@@ -24,11 +24,12 @@ export function ExportDialog() {
     currentNovel,
     currentScreenplay,
     selectedSchema,
+    apiConnected,
     requestExport,
   } = useAppStore()
   const [format, setFormat] = useState<ExportFormat>('yaml')
   const [submitting, setSubmitting] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [result, setResult] = useState<ExportResult | null>(null)
 
   if (!exportDialogOpen) return null
 
@@ -45,6 +46,8 @@ export function ExportDialog() {
     setResult(null)
     setSubmitting(false)
   }
+
+  const canExport = Boolean(currentNovel && currentScreenplay && apiConnected)
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -76,6 +79,17 @@ export function ExportDialog() {
           </Button>
         </div>
 
+        {!apiConnected && (
+          <p className="mb-3 rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
+            当前为 Mock 模式，无法真实导出。请启动后端并刷新页面（侧边栏显示 API）。
+          </p>
+        )}
+        {apiConnected && !currentScreenplay && (
+          <p className="mb-3 rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
+            尚未创建剧本：请先在「改编方案」页确认方案后再导出。
+          </p>
+        )}
+
         <div className="flex flex-col gap-2">
           {formats.map((f) => {
             const Icon = f.icon
@@ -101,21 +115,31 @@ export function ExportDialog() {
         </div>
 
         {result && (
-          <p
+          <div
             className={cn(
               'mt-4 rounded-md p-3 text-sm',
               result.ok ? 'bg-accent text-accent-foreground' : 'bg-destructive/10 text-destructive',
             )}
           >
-            {result.message}
-          </p>
+            <p>{result.message}</p>
+            {result.ok && result.downloadUrl && (
+              <a
+                href={result.downloadUrl}
+                download
+                className="mt-2 inline-flex items-center gap-1.5 font-medium underline underline-offset-2"
+              >
+                <Download className="h-4 w-4" />
+                下载文件
+              </a>
+            )}
+          </div>
         )}
 
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="outline" onClick={handleClose}>
-            取消
+            {result?.ok ? '关闭' : '取消'}
           </Button>
-          <Button disabled={submitting || !currentNovel} onClick={handleExport}>
+          <Button disabled={submitting || !canExport} onClick={() => void handleExport()}>
             {submitting ? <LoadingSpinner /> : null}
             {submitting ? '导出中…' : '开始导出'}
           </Button>

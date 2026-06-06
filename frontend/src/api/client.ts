@@ -199,6 +199,15 @@ export const api = {
       const data = await request<ApiExportRead>(`/exports/${id}`)
       return mapExport(data)
     },
+    waitUntilReady: async (id: string, timeoutMs = 120_000): Promise<ExportJob> => {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const job = await api.exports.get(id)
+        if (job.status === 'done' || job.status === 'failed') return job
+        if (Date.now() > deadline) return job
+        await new Promise((r) => setTimeout(r, 1500))
+      }
+    },
     downloadUrl: (id: string) => `${BASE}/exports/${id}/download`,
   },
 

@@ -255,6 +255,21 @@ export function mapEpisode(dto: ApiEpisodeRead): Episode {
   }
 }
 
+/** 当 episode.source_chapters 为空时，从改编方案回填 */
+export function enrichEpisodesFromPlan(
+  episodes: Episode[],
+  plan?: AdaptationPlan | null,
+): Episode[] {
+  if (!plan?.items.length) return episodes
+  return episodes.map((ep) => {
+    if (ep.sourceChapters.length > 0) return ep
+    const item = plan.items.find((i) => i.episodeNum === ep.episodeNum)
+    return item?.sourceChapters.length
+      ? { ...ep, sourceChapters: item.sourceChapters }
+      : ep
+  })
+}
+
 export function mapTask(dto: ApiTaskRead): Task {
   return {
     id: dto.id,

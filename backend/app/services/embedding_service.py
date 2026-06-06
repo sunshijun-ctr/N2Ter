@@ -106,7 +106,7 @@ class EmbeddingService:
         # 2. Compute missing vectors.
         missing_texts = [texts[i] for i in missing]
         if self.enabled:
-            vectors = await self._call_api(missing_texts)
+            vectors = await self._embed_via_api(missing_texts)
         else:
             vectors = [self._fallback_vector(text) for text in missing_texts]
 
@@ -123,6 +123,15 @@ class EmbeddingService:
                 pass
 
         return [value for value in results if value is not None]  # type: ignore[misc]
+
+    async def _embed_via_api(self, texts: list[str]) -> list[list[float]]:
+        """Call the embeddings API in chunks bounded by ``embedding_batch_size``,
+        since providers reject oversized batches (e.g. DashScope caps at 25/10)."""
+        batch_size = max(1, self._settings.embedding_batch_size)
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(await self._call_api(texts[start : start + batch_size]))
+        return vectors
 
     async def _call_api(self, texts: list[str]) -> list[list[float]]:
         settings = self._settings

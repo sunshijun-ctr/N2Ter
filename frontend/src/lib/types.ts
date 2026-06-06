@@ -149,6 +149,13 @@ export interface ExportJob extends Timestamped {
   expiresAt?: string
 }
 
+export interface ExportResult {
+  ok: boolean
+  message: string
+  downloadUrl?: string
+  jobId?: string
+}
+
 export interface AdaptationPlanItem {
   episodeNum: number
   title: string

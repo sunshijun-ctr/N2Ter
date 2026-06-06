@@ -12,6 +12,7 @@ the preprocessing artefacts (the design's ``fallback_basic_overview``).
 """
 
 import json
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,8 @@ from app.models import (
 from app.services.generation_service import generation_service
 from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
+
+_CHAPTER_REF = re.compile(r"第\s*(\d+)\s*章")
 
 
 class OverviewService:
@@ -108,10 +111,19 @@ class OverviewService:
                     continue
                 if isinstance(candidate, int):
                     source_chapters.append(candidate)
-                elif isinstance(candidate, str) and candidate.strip().isdigit():
-                    source_chapters.append(int(candidate.strip()))
-                elif candidate in title_to_num:
-                    source_chapters.append(title_to_num[candidate])
+                elif isinstance(candidate, str):
+                    # Free-text refs like "第1章 标题, 第3章 标题" -> [1, 3];
+                    # otherwise a pure-digit string, otherwise an exact title.
+                    matches = _CHAPTER_REF.findall(candidate)
+                    if matches:
+                        source_chapters.extend(int(m) for m in matches)
+                    elif candidate.strip().isdigit():
+                        source_chapters.append(int(candidate.strip()))
+                    elif candidate in title_to_num:
+                        source_chapters.append(title_to_num[candidate])
+            # dedupe, preserve order
+            seen: set[int] = set()
+            source_chapters = [n for n in source_chapters if not (n in seen or seen.add(n))]
             episodes.append(
                 {
                     "episode_num": ep.get("episode_number") or ep.get("episode_num") or index,

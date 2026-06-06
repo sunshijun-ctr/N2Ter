@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 
@@ -26,6 +27,9 @@ from app.services.overview_service import overview_service
 from app.services.prompt_loader import prompt_loader
 from app.services.task_service import task_service
 from app.services.vector_store_service import vector_store_service
+
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -379,7 +383,8 @@ class PreprocessingService:
         texts = [scene.content for scene in scenes]
         try:
             embeddings = await embedding_service.embed_batch(texts)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully but surface it
+            _logger.warning("Embedding failed, scenes left unvectorised: %s", exc)
             return 0
         ids = [str(scene.id) for scene in scenes]
         metadatas = [

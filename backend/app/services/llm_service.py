@@ -33,9 +33,13 @@ def _extract_json(text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         match = _JSON_BLOCK.search(text)
-        if match:
-            return json.loads(match.group(0))
-        raise
+        candidate = match.group(0) if match else text
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            # Last resort: strip trailing commas (a common LLM JSON slip).
+            repaired = re.sub(r",(\s*[}\]])", r"\1", candidate)
+            return json.loads(repaired)
 
 
 class LLMService:

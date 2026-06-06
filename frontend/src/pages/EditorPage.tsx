@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Save } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2, Save, Sparkles } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { EpisodeList } from '@/components/editor/EpisodeList'
@@ -21,8 +21,29 @@ export function EditorPage() {
     planConfirmed,
     apiConnected,
     saveActiveEpisode,
+    generateEpisode,
+    generateAllEpisodes,
+    generatingAll,
+    getEpisodes,
   } = useAppStore()
+  const activeEpisode = useAppStore((s) => s.getActiveEpisode())
   const [saving, setSaving] = useState(false)
+
+  const pendingCount = getEpisodes().filter(
+    (e) => e.status === 'pending' || e.status === 'failed',
+  ).length
+
+  // Auto-generate the selected episode's AI draft when it hasn't been generated
+  // yet, so the workspace shows real content the user can fine-tune instead of a
+  // blank canvas. Each episode is triggered at most once per session.
+  const triggered = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!apiConnected || !activeEpisode) return
+    if (activeEpisode.status !== 'pending') return
+    if (triggered.current.has(activeEpisode.id)) return
+    triggered.current.add(activeEpisode.id)
+    void generateEpisode(activeEpisode.id)
+  }, [apiConnected, activeEpisode?.id, activeEpisode?.status, generateEpisode])
 
   async function handleSave() {
     setSaving(true)
@@ -47,9 +68,23 @@ export function EditorPage() {
                 {saving ? '保存中…' : '保存本集'}
               </Button>
             )}
-            <Button variant="outline" size="sm">
-              批量生成剩余集
-            </Button>
+            {apiConnected && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={generatingAll || pendingCount === 0}
+                onClick={() => void generateAllEpisodes()}
+              >
+                {generatingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                {generatingAll
+                  ? '批量生成中…'
+                  : `批量生成剩余集${pendingCount ? ` (${pendingCount})` : ''}`}
+              </Button>
+            )}
             <Button size="sm" onClick={() => setExportDialogOpen(true)}>
               导出
             </Button>

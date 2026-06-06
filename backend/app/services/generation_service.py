@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -20,6 +21,8 @@ from app.services.episode_service import episode_service
 from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
 from app.services.task_service import task_service
+
+_logger = logging.getLogger(__name__)
 
 _SCHEMA_FILES = {
     "ai_video": "aivideo.md",
@@ -65,7 +68,13 @@ class GenerationService:
         if llm_service.enabled:
             try:
                 content = await self._build_content_llm(db, screenplay, episode)
-            except LLMError:
+            except LLMError as exc:
+                _logger.warning(
+                    "LLM generation failed for episode %s (num %s), using fallback: %s",
+                    episode.id,
+                    episode.episode_num,
+                    exc,
+                )
                 content = None
         if content is None:
             content = await self.build_screenwriter_episode(db, screenplay, episode)
@@ -125,19 +134,55 @@ class GenerationService:
             "source_text": "\n\n".join(
                 f"【第{ch.chapter_num}章 {ch.title}】\n{ch.content}" for ch in chapters
             )[:24000],
-            "instruction": "严格按照 schema_definition 输出该集 JSON，顶层包含 schema_version、schema_type、episode_number、source_chapter、title、scenes。",
+            "instruction": (
+                f"只生成【第 {episode.episode_num} 集】这一集，输出**单个 JSON 对象**，"
+                "顶层必须直接包含 scenes 数组（本集所有场景）。"
+                "**不要**输出整剧结构：不要 character_list、synopsis、theme_keywords，"
+                "也**不要**把内容包进 episodes 数组里。"
+                "顶层字段：schema_version、schema_type、episode_number、source_chapter、"
+                "title、episode_summary、key_conflict、emotional_arc、scenes。"
+                "scenes 内每个场景的字段遵循 schema_definition 中 scenes 的定义。"
+            ),
         }
-        content = await llm_service.generate_structured(
-            system=system_prompt,
-            user=json.dumps(user_payload, ensure_ascii=False),
-            max_tokens=get_settings().llm_max_tokens,
-        )
-        return self._normalise_content(content, screenplay, episode)
+        user = json.dumps(user_payload, ensure_ascii=False)
+        max_tokens = get_settings().llm_max_tokens
+        # Long, rich Chinese JSON occasionally comes back with a syntax slip
+        # (e.g. a missing comma) and fails to parse. A low temperature makes the
+        # structure far more reliable, and we retry a couple of times before the
+        # caller falls back to the deterministic template.
+        last_err: LLMError | None = None
+        for attempt in range(3):
+            try:
+                content = await llm_service.generate_structured(
+                    system=system_prompt,
+                    user=user,
+                    max_tokens=max_tokens,
+                    temperature=0.2,
+                )
+                return self._normalise_content(content, screenplay, episode)
+            except LLMError as exc:
+                last_err = exc
+                _logger.warning(
+                    "Episode %s generation attempt %d/3 failed: %s",
+                    episode.episode_num,
+                    attempt + 1,
+                    exc,
+                )
+        raise last_err if last_err else LLMError("generation failed")
 
     def _normalise_content(
         self, content: dict, screenplay: Screenplay, episode: Episode
     ) -> dict:
         content = dict(content or {})
+        # If the model returned a whole-screenplay shape (scenes nested under an
+        # ``episodes`` array) instead of a single episode, lift this episode's
+        # scenes (and episode-level fields) up to the top level.
+        if not content.get("scenes"):
+            nested = self._episode_from_collection(content, episode.episode_num)
+            if nested:
+                for key in ("scenes", "episode_summary", "key_conflict", "emotional_arc", "title"):
+                    if nested.get(key) and not content.get(key):
+                        content[key] = nested[key]
         schema_type = screenplay.schema_type.value
         content.setdefault("schema_version", f"{schema_type}-1.0")
         content["schema_type"] = schema_type
@@ -149,6 +194,21 @@ class GenerationService:
         if not content.get("scenes"):
             content["scenes"] = []
         return content
+
+    @staticmethod
+    def _episode_from_collection(content: dict, episode_num: int) -> dict | None:
+        """Pick this episode out of a whole-screenplay ``episodes`` array, by
+        matching ``episode_number`` first, else the first entry that has scenes."""
+        episodes = content.get("episodes")
+        if not isinstance(episodes, list):
+            return None
+        for ep in episodes:
+            if isinstance(ep, dict) and ep.get("episode_number") == episode_num and ep.get("scenes"):
+                return ep
+        for ep in episodes:
+            if isinstance(ep, dict) and ep.get("scenes"):
+                return ep
+        return None
 
     async def _previous_episode_summary(
         self, db: AsyncSession, screenplay: Screenplay, episode: Episode

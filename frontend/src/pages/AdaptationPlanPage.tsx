@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Minus, Plus, RefreshCw, Sparkles } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -27,6 +27,23 @@ export function AdaptationPlanPage() {
   const [episodeCount, setEpisodeCount] = useState(adaptationPlan?.episodeCount ?? 36)
   const [regenerating, setRegenerating] = useState(false)
   const [confirming, setConfirming] = useState(false)
+
+  // On entering the planning step, pull a real backend plan (proper integer
+  // chapter ranges per episode). The plan inherited from the overview screenplay
+  // is per-chapter and may carry no usable source_chapters, which would create
+  // empty episodes downstream.
+  const fetchedRef = useRef(false)
+  useEffect(() => {
+    if (!apiConnected || !currentNovel || fetchedRef.current) return
+    if (!selectedSchema || selectedSchema === 'overview') return
+    fetchedRef.current = true
+    void fetchAdaptationPlan()
+  }, [apiConnected, currentNovel?.id, selectedSchema, fetchAdaptationPlan])
+
+  // Keep the episode-count control in sync with the loaded plan.
+  useEffect(() => {
+    if (adaptationPlan?.episodeCount) setEpisodeCount(adaptationPlan.episodeCount)
+  }, [adaptationPlan?.episodeCount])
 
   const plan = adaptationPlan
   const schemaLabel =

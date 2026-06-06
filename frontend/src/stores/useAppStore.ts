@@ -7,6 +7,7 @@ import type {
   Episode,
   EpisodeContent,
   ExportFormat,
+  ExportResult,
   Novel,
   OverviewData,
   Scene,
@@ -32,6 +33,7 @@ import {
 } from '@/lib/preprocess-stages'
 import {
   pickScreenplay,
+  enrichEpisodesFromPlan,
   mapOverviewDocument,
   buildOverviewFallback,
   toAdaptationPlanPayload,
@@ -82,6 +84,8 @@ interface AppState {
   overviewData: OverviewData | null
   overviewLoading: boolean
 
+  generatingAll: boolean
+
   hydrateFromApi: () => Promise<void>
   uploadAndPreprocess: (file: File, genres: string[]) => Promise<string | null>
   refreshNovel: (novelId: string) => Promise<void>
@@ -115,6 +119,8 @@ interface AppState {
   addDialogue: (episodeId: string, sceneId: string) => void
   removeDialogue: (episodeId: string, sceneId: string, dialogueId: string) => void
   saveActiveEpisode: () => Promise<void>
+  generateEpisode: (episodeId: string) => Promise<void>
+  generateAllEpisodes: () => Promise<void>
 
   ensureChatSession: () => Promise<void>
   disconnectChat: () => void
@@ -126,7 +132,7 @@ interface AppState {
   setGlobalError: (msg: string | null) => void
   clearError: () => void
   setExportDialogOpen: (open: boolean) => void
-  requestExport: (format: ExportFormat) => Promise<{ ok: boolean; message: string }>
+  requestExport: (format: ExportFormat) => Promise<ExportResult>
 }
 
 function patchEpisodes(
@@ -175,6 +181,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   overviewData: null,
   overviewLoading: false,
+
+  generatingAll: false,
 
   hydrateFromApi: async () => {
     try {
@@ -329,6 +337,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             )
           }
         }
+        episodes = enrichEpisodesFromPlan(episodes, plan)
         set((state) => ({
           currentNovel: novel,
           currentScreenplay: screenplay,
@@ -389,11 +398,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         title: `${currentNovel.title} · 剧本`,
         adaptationPlan: payload,
       })
-      const episodes = await api.episodes.list(screenplay.id)
+      const planResolved = screenplay.adaptationPlan ?? adaptationPlan
+      const episodes = enrichEpisodesFromPlan(
+        await api.episodes.list(screenplay.id),
+        planResolved,
+      )
       set((state) => ({
         planConfirmed: true,
         currentScreenplay: screenplay,
-        adaptationPlan: screenplay.adaptationPlan ?? adaptationPlan,
+        adaptationPlan: planResolved,
         episodesByScreenplay: {
           ...state.episodesByScreenplay,
           [screenplay.id]: episodes,
@@ -646,6 +659,69 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  generateEpisode: async (episodeId) => {
+    const screenplayId = get().currentScreenplay?.id
+    if (!screenplayId || !get().apiConnected) return
+    // Skip if this episode is already being generated (avoids a double request
+    // when click-to-generate races the batch loop).
+    const existing = (get().episodesByScreenplay[screenplayId] ?? []).find(
+      (e) => e.id === episodeId,
+    )
+    if (existing?.status === 'generating') return
+
+    const patchEpisode = (updater: (ep: Episode) => Episode) =>
+      set((state) => ({
+        episodesByScreenplay: {
+          ...state.episodesByScreenplay,
+          [screenplayId]: (state.episodesByScreenplay[screenplayId] ?? []).map((e) =>
+            e.id === episodeId ? updater(e) : e,
+          ),
+        },
+      }))
+
+    patchEpisode((e) => ({ ...e, status: 'generating' }))
+    try {
+      await api.episodes.generate(episodeId)
+      // Backend may run generation async (Celery) or inline; poll the episode
+      // until it leaves the `generating` state, then store the final content.
+      const deadline = Date.now() + 5 * 60 * 1000
+      let finalEpisode: Episode | null = null
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const ep = await api.episodes.get(episodeId)
+        if (ep.status !== 'generating' || Date.now() > deadline) {
+          finalEpisode = ep
+          break
+        }
+      }
+      if (finalEpisode) {
+        const ep = finalEpisode
+        patchEpisode(() => ep)
+      }
+    } catch (e) {
+      patchEpisode((ep) => ({ ...ep, status: 'failed' }))
+      set({ globalError: e instanceof ApiError ? e.message : '生成本集失败' })
+    }
+  },
+
+  generateAllEpisodes: async () => {
+    const screenplayId = get().currentScreenplay?.id
+    if (!screenplayId || !get().apiConnected || get().generatingAll) return
+    set({ generatingAll: true })
+    try {
+      // Snapshot the not-yet-generated episodes, then run sequentially to stay
+      // within LLM rate limits.
+      const pending = (get().episodesByScreenplay[screenplayId] ?? []).filter(
+        (e) => e.status === 'pending' || e.status === 'failed',
+      )
+      for (const ep of pending) {
+        await get().generateEpisode(ep.id)
+      }
+    } finally {
+      set({ generatingAll: false })
+    }
+  },
+
   setGlobalLoading: (v) => set({ globalLoading: v }),
   setGlobalError: (msg) => set({ globalError: msg }),
   clearError: () => set({ globalError: null }),
@@ -653,29 +729,46 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   requestExport: async (format) => {
     const { currentScreenplay, currentNovel, apiConnected } = get()
-    if (!currentScreenplay || !currentNovel) {
+    const label = format === 'yaml' ? 'YAML' : format === 'pdf' ? 'PDF' : 'ZIP'
+
+    if (!currentNovel) {
       return { ok: false, message: '请先选择小说项目' }
     }
-    set({ globalLoading: true })
-    try {
-      if (apiConnected) {
-        const job = await api.exports.create(currentScreenplay.id, format)
-        set({ globalLoading: false, exportDialogOpen: false })
-        const label = format === 'yaml' ? 'YAML' : format === 'pdf' ? 'PDF' : 'ZIP'
-        if (job.status === 'failed') {
-          return { ok: false, message: `导出失败（${label}）` }
-        }
-        const hint = job.fileUrl ? ` 文件：${job.fileUrl}` : ''
-        return { ok: true, message: `《${currentNovel.title}》${label} 导出完成。${hint}` }
+    if (!currentScreenplay) {
+      return {
+        ok: false,
+        message: '尚未创建剧本：请先在「改编方案」确认方案，或完成预处理后再导出',
       }
-    } catch (e) {
-      set({ globalLoading: false })
-      return { ok: false, message: e instanceof ApiError ? e.message : '导出失败' }
     }
+
+    if (apiConnected) {
+      try {
+        let job = await api.exports.create(currentScreenplay.id, format)
+        if (job.status === 'pending' || job.status === 'running') {
+          job = await api.exports.waitUntilReady(job.id)
+        }
+        if (job.status === 'failed') {
+          return { ok: false, message: `${label} 导出失败，请稍后重试` }
+        }
+        if (job.status !== 'done') {
+          return { ok: false, message: `${label} 导出超时，请稍后在任务中心重试` }
+        }
+        return {
+          ok: true,
+          message: `《${currentNovel.title}》${label} 已生成，点击下方链接下载`,
+          downloadUrl: api.exports.downloadUrl(job.id),
+          jobId: job.id,
+        }
+      } catch (e) {
+        return { ok: false, message: e instanceof ApiError ? e.message : '导出失败' }
+      }
+    }
+
     await new Promise((r) => setTimeout(r, 800))
-    set({ globalLoading: false, exportDialogOpen: false })
-    const label = format === 'yaml' ? 'YAML' : format === 'pdf' ? 'PDF' : 'ZIP 打包'
-    return { ok: true, message: `《${currentNovel.title}》${label} 导出任务已创建（mock）` }
+    return {
+      ok: true,
+      message: `《${currentNovel.title}》${label} 导出任务已创建（mock · 需连接后端）`,
+    }
   },
 
   ensureChatSession: async () => {
