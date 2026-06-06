@@ -1,4 +1,5 @@
 import {
+  Check,
   Clapperboard,
   Loader2,
   MessageSquarePlus,
@@ -14,7 +15,7 @@ import { useAppStore } from '@/stores/useAppStore'
 import type { Scene, Shot } from '@/lib/types'
 import { cn, formatSourceChapters } from '@/lib/utils'
 
-const labelClass = 'text-[10px] text-muted-foreground/75'
+const labelClass = 'text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80'
 
 /** 人物行：吴世恭（自言自语） */
 function formatSpeaker(character: string, parenthetical?: string): string {
@@ -62,7 +63,7 @@ function Field({
 /** 作业本式对白区：左侧订线 + 每条对白下方横线 */
 function DialogueSheet({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative border-l border-red-300/30 pl-4 dark:border-red-400/20">
+    <div className="relative rounded-md border-l-2 border-red-300/35 bg-background/40 py-1 pl-4 dark:border-red-400/25">
       {children}
     </div>
   )
@@ -79,7 +80,7 @@ function DialogueRuledBlock({
     <div
       className={cn(
         'min-w-0 py-3',
-        ruled && 'border-b border-slate-300/70 dark:border-slate-600/50',
+        ruled && 'border-b border-slate-300/60 dark:border-slate-600/45',
       )}
     >
       {children}
@@ -110,31 +111,29 @@ function DialogueEntry({
   speakerClassName?: string
 }) {
   return (
-    <div className="flex w-full min-w-0 items-start gap-2">
-      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
-        <AutoInput
-          className={cn('shrink-0 font-medium', speakerClassName)}
-          minChars={2}
-          value={speaker}
-          onChange={(e) => onSpeakerChange(e.target.value)}
-          placeholder={speakerPlaceholder}
-        />
-        <DialogueLine
-          className="min-w-[12ch] flex-1 basis-[8rem]"
-          value={line}
-          onChange={onLineChange}
-          placeholder={linePlaceholder}
-        />
-      </div>
+    <div className="grid w-full min-w-0 grid-cols-1 items-start gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-x-3">
+      <AutoInput
+        className={cn('w-full shrink-0 font-medium sm:w-auto', speakerClassName)}
+        minChars={2}
+        value={speaker}
+        onChange={(e) => onSpeakerChange(e.target.value)}
+        placeholder={speakerPlaceholder}
+      />
+      <DialogueLine
+        className="min-w-0 sm:col-start-2"
+        value={line}
+        onChange={onLineChange}
+        placeholder={linePlaceholder}
+      />
       <Button
         type="button"
         variant="ghost"
         size="icon"
-        className="mt-0.5 h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+        className="h-8 w-8 shrink-0 self-start text-muted-foreground hover:text-destructive sm:col-start-3"
         onClick={onRemove}
         aria-label={removeLabel}
       >
-        <Trash2 className="h-3 w-3" />
+        <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>
   )
@@ -368,11 +367,13 @@ function ShotSceneEditor({
   const shots = scene.shots ?? []
 
   return (
-    <section className="border-b border-border/15 pb-6 last:border-b-0">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Clapperboard className="h-4 w-4 text-primary/80" />
-          <span className="text-sm font-semibold">场景 {index + 1}</span>
+    <section className="rounded-xl border border-border/40 bg-background/60 p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Clapperboard className="h-4 w-4 shrink-0 text-primary/80" />
+          <span className="font-manuscript text-base font-semibold tracking-tight">
+            场景 {index + 1}
+          </span>
           <span className="text-xs text-muted-foreground">· {shots.length} 个分镜</span>
         </div>
         <div className="flex gap-1">
@@ -446,9 +447,11 @@ function SceneEditor({
     useAppStore()
 
   return (
-    <section className="border-b border-border/15 pb-6 last:border-b-0">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">场景 {index + 1}</span>
+    <section className="rounded-xl border border-border/40 bg-background/60 p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <span className="font-manuscript text-base font-semibold tracking-tight text-foreground">
+          场景 {index + 1}
+        </span>
         <div className="flex gap-1">
           <Button
             type="button"
@@ -475,7 +478,7 @@ function SceneEditor({
 
       <Field label="场景头" className="mb-3 block">
         <AutoInput
-          className="text-xs"
+          className="font-manuscript text-sm font-medium uppercase tracking-wide"
           minChars={8}
           value={scene.heading}
           onChange={(e) => updateScene(episodeId, scene.id, { heading: e.target.value })}
@@ -483,8 +486,9 @@ function SceneEditor({
         />
       </Field>
 
-      <Field label="动作描述" className="mb-4 block w-full">
+      <Field label="动作描述" className="mb-5 block w-full">
         <AutoTextarea
+          className="font-manuscript text-[15px] leading-relaxed"
           minRows={2}
           value={scene.action}
           onChange={(e) => updateScene(episodeId, scene.id, { action: e.target.value })}
@@ -547,13 +551,15 @@ export function Canvas() {
     apiConnected,
     selectedSchema,
     currentScreenplay,
+    agentStepsByEpisode,
   } = useAppStore()
   const episode = getActiveEpisode()
 
   if (!episode) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        请选择一集进行编辑
+      <div className="manuscript-surface flex flex-1 flex-col items-center justify-center px-6 text-center">
+        <p className="font-manuscript text-base text-muted-foreground">请选择左侧一集开始编辑</p>
+        <p className="mt-1 text-xs text-muted-foreground/80">画布内容会随分集切换自动保存到本地会话</p>
       </div>
     )
   }
@@ -561,30 +567,68 @@ export function Canvas() {
   const chapterLabel = formatSourceChapters(episode.sourceChapters)
   const scenes = episode.content.scenes ?? []
   const blockerNum = getEpisodeBlocker(episode.id)
+  const agentSteps = agentStepsByEpisode[episode.id] ?? []
   const isAiVideo =
     selectedSchema === 'ai_video' || currentScreenplay?.schemaType === 'ai_video'
 
   return (
-    <div className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-background">
-      <div className="w-full px-6 py-6">
-        <div className="mb-5 border-b border-border/20 pb-4">
-          <h2 className="text-lg font-semibold">
-            第 {episode.episodeNum} 集 · {episode.title}
+    <div className="manuscript-surface relative min-h-0 min-w-0 flex-1 overflow-auto">
+      <div className="mx-auto w-full max-w-manuscript px-6 py-8 sm:px-10">
+        <header className="mb-8 border-b border-border/50 pb-5">
+          <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
+            第 {episode.episodeNum} 集
+          </p>
+          <h2 className="mt-1 font-display text-2xl font-normal leading-tight tracking-tight">
+            {episode.title}
           </h2>
           {chapterLabel && (
-            <p className="mt-1 text-xs text-muted-foreground">源章节：{chapterLabel}</p>
+            <p className="mt-2 text-xs text-muted-foreground">源章节 · {chapterLabel}</p>
           )}
-          <p className="mt-1 text-xs text-muted-foreground/80">
-            画布即 source of truth ·{' '}
-            {isAiVideo ? '可编辑分镜、对白与 generation_prompt' : '可手动增删场景与对白'}
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground/85">
+            {isAiVideo
+              ? '编辑分镜、对白与 generation_prompt · 保存后写入本集 JSON'
+              : '场景与对白可直接编辑 · 作业本横线分隔每句对白'}
           </p>
-        </div>
+        </header>
 
-        <div className="flex w-full flex-col gap-2">
+        <div className="flex w-full flex-col gap-6">
           {episode.status === 'generating' ? (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-primary" />
-              AI 正在生成本集初稿…
+            <div className="rounded-lg border border-dashed border-border/60 p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                AI 正在生成本集 · agent 执行过程
+              </div>
+              {agentSteps.length === 0 ? (
+                <p className="text-xs text-muted-foreground">正在准备…</p>
+              ) : (
+                <ol className="flex flex-col gap-2">
+                  {agentSteps.map((s, i) => {
+                    const active = i === agentSteps.length - 1
+                    return (
+                      <li
+                        key={`${s.stepIndex}-${i}`}
+                        className="flex items-start gap-2 text-sm"
+                      >
+                        <span className="mt-0.5 shrink-0">
+                          {active ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                          ) : (
+                            <Check className="h-3.5 w-3.5 text-primary" />
+                          )}
+                        </span>
+                        <span
+                          className={cn(
+                            'leading-snug',
+                            active ? 'text-foreground' : 'text-muted-foreground',
+                          )}
+                        >
+                          {s.label || s.phase}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
             </div>
           ) : scenes.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-muted-foreground">
@@ -619,8 +663,8 @@ export function Canvas() {
           {episode.status !== 'generating' && (
             <Button
               type="button"
-              variant="ghost"
-              className="mt-2 w-full text-muted-foreground"
+              variant="outline"
+              className="mt-2 w-full border-dashed text-muted-foreground hover:text-foreground"
               onClick={() => addScene(episode.id)}
             >
               <Plus className="h-4 w-4" />

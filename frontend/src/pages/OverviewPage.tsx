@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { PageShell } from '@/components/layout/PageShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAppStore } from '@/stores/useAppStore'
@@ -17,12 +17,9 @@ export function OverviewPage() {
 
   if (!currentNovel) {
     return (
-      <>
-        <PageHeader title="概览版剧本" description="请先在侧边栏选择项目" />
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          暂无选中项目
-        </div>
-      </>
+      <PageShell width="md" className="flex flex-col items-center justify-center text-center">
+        <p className="text-sm text-muted-foreground">请先在侧边栏选择项目</p>
+      </PageShell>
     )
   }
 
@@ -45,23 +42,19 @@ export function OverviewPage() {
     : []
 
   return (
-    <>
-      <PageHeader
-        title="概览版剧本"
-        description={`《${currentNovel.title}》· 预处理 Stage 6 自动生成的全书改编报告`}
-        actions={
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setExportDialogOpen(true)}>
-              导出
-            </Button>
-            <Button size="sm" onClick={() => navigate('/schema-select')}>
-              选择详细版类型
-            </Button>
-          </div>
-        }
-      />
-      <div className="flex-1 overflow-auto p-6">
-        {overviewLoading ? (
+    <PageShell width="lg">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">《{currentNovel.title}》· 全书改编报告</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setExportDialogOpen(true)}>
+            导出
+          </Button>
+          <Button size="sm" onClick={() => navigate('/schema-select')}>
+            选择详细版类型
+          </Button>
+        </div>
+      </div>
+      {overviewLoading ? (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             加载概览版…
@@ -121,7 +114,6 @@ export function OverviewPage() {
             </Card>
           </div>
         )}
-      </div>
-    </>
+    </PageShell>
   )
 }

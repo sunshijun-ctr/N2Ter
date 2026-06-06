@@ -41,9 +41,10 @@ export function AutoInput({
         value={value}
         placeholder={placeholder}
         className={cn(
-          'col-start-1 row-start-1 min-w-0 max-w-full bg-transparent px-1 py-1 outline-none [grid-area:field]',
-          'border-b border-border/20 transition-colors',
-          'hover:border-border/40 focus:border-primary/50',
+        'col-start-1 row-start-1 min-w-0 max-w-full bg-transparent px-1 py-1 outline-none [grid-area:field]',
+        'font-manuscript text-[15px] leading-relaxed',
+        'border-b border-border/30 transition-colors duration-200',
+        'hover:border-border/50 focus:border-primary/55 focus-visible:ring-0',
           className,
         )}
         {...props}

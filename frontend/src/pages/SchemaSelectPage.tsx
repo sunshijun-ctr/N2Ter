@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { Clapperboard, FileText, PenLine, Check } from 'lucide-react'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { PageShell } from '@/components/layout/PageShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -29,21 +29,13 @@ export function SchemaSelectPage() {
 
   return (
     <>
-      <PageHeader
-        title="选择剧本类型"
-        description={
-          currentNovel
-            ? `《${currentNovel.title}》· 看完概览后再选详细版（Design Step 4）`
-            : '看完概览后再选详细版类型'
-        }
-      />
-      <div className="flex-1 overflow-auto p-6">
-        <div className="mx-auto flex max-w-4xl flex-col gap-6">
-          <p className="text-sm text-muted-foreground">
-            三套 Schema 用途不同。选「只要概览版」将跳过详细剧本生成，可直接导出改编报告。
+      <PageShell width="lg">
+          <p className="mb-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            {currentNovel ? `《${currentNovel.title}》· ` : ''}
+            三套 Schema 面向不同产出形态。选「概览版」可跳过详细剧本，直接导出改编报告。
           </p>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-5 md:grid-cols-3">
             {SCHEMA_OPTIONS.map((opt) => {
               const Icon = schemaIcons[opt.type]
               const active = selectedSchema === opt.type
@@ -53,13 +45,18 @@ export function SchemaSelectPage() {
                   type="button"
                   onClick={() => setSelectedSchema(opt.type)}
                   className={cn(
-                    'rounded-lg border text-left transition-all',
+                    'cursor-pointer rounded-xl text-left transition-all duration-200',
                     active
-                      ? 'border-primary ring-2 ring-primary/30'
-                      : 'border-border hover:border-primary/50',
+                      ? 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background'
+                      : 'hover:-translate-y-0.5 hover:shadow-soft',
                   )}
                 >
-                  <Card className="h-full border-0 shadow-none">
+                  <Card
+                    className={cn(
+                      'h-full',
+                      active ? 'border-primary/30 bg-accent/30' : 'hover:border-border',
+                    )}
+                  >
                     <CardHeader className="pb-3">
                       <div className="mb-2 flex items-center justify-between">
                         <div
@@ -93,7 +90,7 @@ export function SchemaSelectPage() {
             })}
           </div>
 
-          <div className="flex items-center justify-between border-t pt-4">
+          <div className="mt-8 flex items-center justify-between border-t border-border/50 pt-6">
             <Button variant="outline" onClick={() => navigate('/overview')}>
               返回概览
             </Button>
@@ -101,8 +98,7 @@ export function SchemaSelectPage() {
               {selectedSchema === 'overview' ? '完成，留在概览版' : '下一步：确认改编方案'}
             </Button>
           </div>
-        </div>
-      </div>
+      </PageShell>
     </>
   )
 }

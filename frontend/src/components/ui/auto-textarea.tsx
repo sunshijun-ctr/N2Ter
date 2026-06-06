@@ -6,7 +6,7 @@ type AutoTextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
 }
 
 const fieldBase =
-  'block w-full min-w-0 resize-none overflow-hidden bg-transparent px-1 py-1.5 text-sm leading-relaxed outline-none border-b border-border/20 transition-colors hover:border-border/40 focus:border-primary/50'
+  'block w-full min-w-0 resize-none overflow-hidden bg-transparent px-1 py-1.5 font-manuscript text-[15px] leading-relaxed outline-none border-b border-border/30 transition-colors duration-200 hover:border-border/50 focus:border-primary/55 focus-visible:ring-0'
 
 /** 全宽展示，高度随内容增长 */
 export function AutoTextarea({

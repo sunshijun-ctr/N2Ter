@@ -34,6 +34,11 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        highlight: 'hsl(var(--highlight))',
+      },
+      boxShadow: {
+        soft: '0 2px 8px -2px hsl(var(--foreground) / 0.06), 0 12px 28px -6px hsl(var(--foreground) / 0.08)',
+        panel: '0 1px 0 hsl(var(--border) / 0.8), 0 16px 40px -12px hsl(var(--foreground) / 0.1)',
       },
       borderRadius: {
         lg: 'var(--radius)',
@@ -42,6 +47,11 @@ export default {
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '"Microsoft YaHei"', 'sans-serif'],
+        display: ['Calistoga', 'Georgia', 'serif'],
+        manuscript: ['"Noto Serif SC"', '"Songti SC"', 'SimSun', 'serif'],
+      },
+      maxWidth: {
+        manuscript: '46rem',
       },
     },
   },

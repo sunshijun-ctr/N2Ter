@@ -122,6 +122,15 @@ export interface Episode extends Timestamped {
   errorMessage?: string
 }
 
+/** 生成时 agent 的一个可见执行步骤（用于 UI 实时展示执行过程） */
+export interface AgentStep {
+  stepIndex: number
+  /** research | draft | … */
+  phase: string
+  label: string
+  tools: string[]
+}
+
 export interface Task extends Timestamped {
   id: string
   taskType: TaskType

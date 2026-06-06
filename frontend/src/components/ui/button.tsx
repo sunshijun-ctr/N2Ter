@@ -5,10 +5,10 @@ type Variant = 'default' | 'secondary' | 'outline' | 'ghost' | 'destructive'
 type Size = 'sm' | 'md' | 'lg' | 'icon'
 
 const variants: Record<Variant, string> = {
-  default: 'bg-primary text-primary-foreground hover:opacity-90',
+  default: 'bg-primary text-primary-foreground shadow-soft hover:brightness-[1.03] active:brightness-95',
   secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-  outline: 'border border-input bg-transparent hover:bg-secondary',
-  ghost: 'hover:bg-secondary',
+  outline: 'border border-input/80 bg-background/60 backdrop-blur-sm hover:bg-secondary/60',
+  ghost: 'hover:bg-secondary/80',
   destructive: 'bg-destructive text-destructive-foreground hover:opacity-90',
 }
 
@@ -30,7 +30,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors',
+        'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:pointer-events-none disabled:opacity-50',
         variants[variant],

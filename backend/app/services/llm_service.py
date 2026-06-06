@@ -29,17 +29,20 @@ def _extract_json(text: str) -> Any:
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text).strip()
+    # strict=False tolerates raw control characters (literal newlines/tabs) inside
+    # string values — a very common LLM slip, especially in long ai_video prompt
+    # fields. Without it json raises "Invalid control character".
     try:
-        return json.loads(text)
+        return json.loads(text, strict=False)
     except json.JSONDecodeError:
         match = _JSON_BLOCK.search(text)
         candidate = match.group(0) if match else text
         try:
-            return json.loads(candidate)
+            return json.loads(candidate, strict=False)
         except json.JSONDecodeError:
             # Last resort: strip trailing commas (a common LLM JSON slip).
             repaired = re.sub(r",(\s*[}\]])", r"\1", candidate)
-            return json.loads(repaired)
+            return json.loads(repaired, strict=False)
 
 
 class LLMService:

@@ -3,6 +3,7 @@ import { api, ApiError } from '@/api/client'
 import { connectConversationWs, connectNovelProgressWs } from '@/api/websocket'
 import type {
   AdaptationPlan,
+  AgentStep,
   ChatMessage,
   Episode,
   EpisodeContent,
@@ -72,6 +73,8 @@ interface AppState {
   currentScreenplay: Screenplay | null
   episodesByScreenplay: Record<string, Episode[]>
   activeEpisodeId: string | null
+  /** 生成时各集 agent 的实时执行步骤，按 episodeId 索引 */
+  agentStepsByEpisode: Record<string, AgentStep[]>
 
   selectedSchema: SchemaType | null
   adaptationPlan: AdaptationPlan | null
@@ -216,6 +219,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentScreenplay: initialScreenplay ?? null,
   episodesByScreenplay: cloneEpisodes(mockEpisodesByScreenplay),
   activeEpisodeId: initialEpisodes[0]?.id ?? null,
+  agentStepsByEpisode: {},
 
   selectedSchema: null,
   adaptationPlan: initialScreenplay?.adaptationPlan ?? mockAdaptationPlan,
@@ -1166,6 +1170,52 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
 
     patchEpisode((e) => ({ ...e, status: 'generating' }))
+    // 实时展示 agent 执行过程：清空本集旧步骤，并订阅小说进度推送，过滤出本集的
+    // agent_episode_step 事件。生成是同步阻塞请求，必须在 await 之前开好这条并发
+    // 连接才能边生成边看到步骤。
+    set((state) => ({
+      agentStepsByEpisode: { ...state.agentStepsByEpisode, [episodeId]: [] },
+    }))
+    const novelId = get().currentNovel?.id
+    let stepWs: { close: () => void } | null = null
+    if (novelId) {
+      // 基线：忽略 WS 重放的历史事件（含本集上一次生成的旧步骤）。
+      let sinceId = 0
+      try {
+        const prior = await api.novels.progress(novelId)
+        sinceId = prior.reduce((m, e) => Math.max(m, e.id), 0)
+      } catch {
+        sinceId = 0
+      }
+      stepWs = connectNovelProgressWs(novelId, {
+        onProgress: (msg) => {
+          if (msg.id <= sinceId || msg.event_type !== 'agent_episode_step') return
+          const p = msg.payload as {
+            episode_id?: string
+            step_index?: number
+            phase?: string
+            label?: string
+            tools?: string[]
+          }
+          if (p.episode_id !== episodeId) return
+          set((state) => {
+            const prev = state.agentStepsByEpisode[episodeId] ?? []
+            const step: AgentStep = {
+              stepIndex: Number(p.step_index ?? prev.length + 1),
+              phase: String(p.phase ?? ''),
+              label: String(p.label ?? ''),
+              tools: Array.isArray(p.tools) ? p.tools : [],
+            }
+            return {
+              agentStepsByEpisode: {
+                ...state.agentStepsByEpisode,
+                [episodeId]: [...prev, step],
+              },
+            }
+          })
+        },
+      })
+    }
     try {
       await api.episodes.generate(episodeId)
       // Backend may run generation async (Celery) or inline; poll the episode
@@ -1194,6 +1244,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       patchEpisode((ep) => ({ ...ep, status: 'failed' }))
       set({ globalError: e instanceof ApiError ? e.message : '生成本集失败' })
+    } finally {
+      stepWs?.close()
     }
   },
 

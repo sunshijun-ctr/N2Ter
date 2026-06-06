@@ -3,47 +3,49 @@
 @tailwind utilities;
 
 @layer base {
-  /* 暖米白 + 鼠尾草绿（Claude 式底色 + 米绿强调） */
   :root {
-    --background: 42 33% 97%;
-    --foreground: 30 12% 18%;
-    --card: 40 28% 95%;
-    --card-foreground: 30 12% 18%;
-    --primary: 152 28% 36%;
+    --background: 43 30% 96%;
+    --foreground: 28 18% 14%;
+    --card: 42 35% 99%;
+    --card-foreground: 28 18% 14%;
+    --primary: 152 32% 32%;
     --primary-foreground: 42 40% 98%;
-    --secondary: 38 22% 91%;
-    --secondary-foreground: 30 12% 22%;
-    --muted: 40 18% 92%;
-    --muted-foreground: 30 8% 42%;
-    --accent: 152 22% 90%;
-    --accent-foreground: 152 32% 26%;
-    --destructive: 0 65% 48%;
+    --secondary: 38 24% 92%;
+    --secondary-foreground: 28 14% 22%;
+    --muted: 40 20% 93%;
+    --muted-foreground: 28 8% 40%;
+    --accent: 152 24% 92%;
+    --accent-foreground: 152 36% 24%;
+    --destructive: 0 62% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 38 14% 86%;
-    --input: 38 14% 86%;
-    --ring: 152 28% 36%;
-    --radius: 0.65rem;
+    --border: 36 16% 84%;
+    --input: 36 16% 84%;
+    --ring: 152 32% 32%;
+    --radius: 0.75rem;
+    --highlight: 32 95% 44%;
+    --surface-glow: 152 40% 88%;
   }
 
-  /* 可选暗色：暖调深绿灰，非紫 */
   .dark {
-    --background: 150 8% 12%;
-    --foreground: 42 20% 92%;
-    --card: 150 10% 15%;
-    --card-foreground: 42 20% 92%;
-    --primary: 152 32% 48%;
-    --primary-foreground: 150 10% 10%;
-    --secondary: 150 8% 20%;
-    --secondary-foreground: 42 20% 92%;
-    --muted: 150 8% 20%;
-    --muted-foreground: 40 10% 62%;
-    --accent: 152 18% 22%;
-    --accent-foreground: 152 35% 78%;
+    --background: 150 10% 10%;
+    --foreground: 42 22% 94%;
+    --card: 150 12% 14%;
+    --card-foreground: 42 22% 94%;
+    --primary: 152 34% 46%;
+    --primary-foreground: 150 12% 8%;
+    --secondary: 150 10% 18%;
+    --secondary-foreground: 42 22% 94%;
+    --muted: 150 8% 18%;
+    --muted-foreground: 40 10% 60%;
+    --accent: 152 16% 20%;
+    --accent-foreground: 152 40% 78%;
     --destructive: 0 55% 45%;
     --destructive-foreground: 0 0% 100%;
-    --border: 150 8% 22%;
-    --input: 150 8% 24%;
-    --ring: 152 32% 48%;
+    --border: 150 8% 20%;
+    --input: 150 8% 22%;
+    --ring: 152 34% 46%;
+    --highlight: 32 90% 52%;
+    --surface-glow: 152 20% 18%;
   }
 
   * {
@@ -52,8 +54,66 @@
 
   body {
     background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(ellipse 120% 80% at 100% -20%, hsl(var(--surface-glow) / 0.45), transparent 50%),
+      radial-gradient(ellipse 80% 60% at 0% 100%, hsl(38 30% 88% / 0.35), transparent 45%);
     color: hsl(var(--foreground));
     font-feature-settings: 'rlig' 1, 'calt' 1;
     -webkit-font-smoothing: antialiased;
+  }
+
+  .dark body {
+    background-image:
+      radial-gradient(ellipse 100% 70% at 100% 0%, hsl(152 20% 16% / 0.6), transparent 55%),
+      radial-gradient(ellipse 70% 50% at 0% 100%, hsl(150 12% 12% / 0.8), transparent 50%);
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply border border-border/50 bg-card/75 shadow-sm backdrop-blur-xl;
+  }
+
+  .glass-panel-strong {
+    @apply border border-border/60 bg-card/90 shadow-md backdrop-blur-xl;
+  }
+
+  .surface-elevated {
+    box-shadow:
+      0 1px 2px hsl(var(--foreground) / 0.04),
+      0 12px 32px -8px hsl(var(--foreground) / 0.08);
+  }
+
+  .nav-rail-active {
+    @apply relative bg-accent/70 font-semibold text-accent-foreground shadow-sm;
+  }
+
+  .nav-rail-active::before {
+    content: '';
+    @apply absolute bottom-2 left-0 top-2 w-[3px] rounded-full bg-primary;
+  }
+
+  /* 剧本工作台：稿纸画布 */
+  .manuscript-surface {
+    background-color: hsl(44 42% 98%);
+    background-image: linear-gradient(hsl(38 14% 86% / 0.32) 1px, transparent 1px);
+    background-size: 100% 2rem;
+    box-shadow: inset 0 1px 0 hsl(38 14% 86% / 0.45);
+  }
+
+  .dark .manuscript-surface {
+    background-color: hsl(150 8% 14%);
+    background-image: linear-gradient(hsl(150 8% 22% / 0.75) 1px, transparent 1px);
+    box-shadow: inset 0 1px 0 hsl(150 8% 22%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Library, Trash2 } from 'lucide-react'
+import { ChevronDown, Library, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/ui/loading'
@@ -13,6 +13,13 @@ const statusLabel: Record<NovelStatus, string> = {
   preprocessing_failed: '失败',
 }
 
+const statusTone: Record<NovelStatus, string> = {
+  uploaded: 'bg-secondary text-secondary-foreground',
+  preprocessing: 'bg-highlight/15 text-highlight',
+  ready_for_planning: 'bg-primary/10 text-primary',
+  preprocessing_failed: 'bg-destructive/10 text-destructive',
+}
+
 interface NovelSwitcherProps {
   collapsed?: boolean
   onExpand?: () => void
@@ -21,6 +28,7 @@ interface NovelSwitcherProps {
 export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProps) {
   const { novels, currentNovel, switchNovel, deleteNovel } = useAppStore()
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(true)
 
   async function handleDelete(novelId: string, title: string) {
     if (deletingId) return
@@ -34,28 +42,44 @@ export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProp
 
   if (collapsed) {
     return (
-      <div className="flex justify-center border-b py-2">
+      <div className="flex justify-center border-b border-border/50 py-2.5">
         <Button
           variant="ghost"
           size="icon"
-          title={currentNovel ? `当前：${currentNovel.title}（点击展开切换项目）` : '选择项目'}
-          aria-label="当前项目，点击展开侧边栏以切换"
+          className="h-10 w-10"
+          title={currentNovel ? `当前：${currentNovel.title}` : '选择项目'}
+          aria-label="当前项目，点击展开侧边栏"
           onClick={onExpand}
         >
-          <Library className="h-4 w-4" />
+          <Library className="h-[18px] w-[18px]" />
         </Button>
       </div>
     )
   }
 
   return (
-    <div className="border-b p-3">
-      <p className="mb-1.5 text-xs text-muted-foreground">当前项目</p>
+    <div className="border-b border-border/50 px-3 py-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="mb-2 flex w-full cursor-pointer items-center justify-between px-1 text-left"
+        aria-expanded={expanded}
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+          项目库
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-3.5 w-3.5 text-muted-foreground transition-transform duration-200',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
 
       {novels.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无项目，请先上传小说</p>
-      ) : (
-        <ul className="max-h-44 space-y-1 overflow-y-auto">
+        <p className="px-1 text-xs leading-relaxed text-muted-foreground">暂无项目，请先上传小说</p>
+      ) : expanded ? (
+        <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-0.5">
           {novels.map((novel) => {
             const active = currentNovel?.id === novel.id
             const busy = deletingId === novel.id
@@ -63,8 +87,10 @@ export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProp
               <li
                 key={novel.id}
                 className={cn(
-                  'flex items-stretch gap-0.5 rounded-md border',
-                  active ? 'border-primary/40 bg-accent/40' : 'border-transparent hover:bg-secondary/60',
+                  'group flex items-stretch overflow-hidden rounded-xl border transition-all duration-200',
+                  active
+                    ? 'border-primary/25 bg-accent/50 shadow-soft'
+                    : 'border-border/40 bg-background/40 hover:border-border hover:bg-secondary/50',
                 )}
               >
                 <button
@@ -72,35 +98,51 @@ export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProp
                   disabled={Boolean(deletingId)}
                   onClick={() => void switchNovel(novel.id)}
                   className={cn(
-                    'min-w-0 flex-1 px-2.5 py-2 text-left text-sm transition-colors',
+                    'min-w-0 flex-1 px-3 py-2.5 text-left transition-colors',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                    active && 'font-medium',
                   )}
                 >
-                  <span className="block truncate">{novel.title}</span>
-                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                    {statusLabel[novel.status]}
-                    {novel.wordCount
-                      ? ` · ${(novel.wordCount / 10000).toFixed(1)} 万字`
-                      : ''}
+                  <span className="block truncate text-sm font-medium leading-snug">{novel.title}</span>
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={cn(
+                        'inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-medium',
+                        statusTone[novel.status],
+                      )}
+                    >
+                      {statusLabel[novel.status]}
+                    </span>
+                    {novel.wordCount ? (
+                      <span className="text-[10px] text-muted-foreground">
+                        {(novel.wordCount / 10000).toFixed(1)} 万字
+                      </span>
+                    ) : null}
                   </span>
                 </button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-auto w-8 shrink-0 rounded-l-none text-muted-foreground hover:text-destructive"
+                  className="h-auto w-9 shrink-0 rounded-none text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
                   disabled={Boolean(deletingId)}
                   title={`删除「${novel.title}」`}
                   aria-label={`删除项目 ${novel.title}`}
                   onClick={() => void handleDelete(novel.id, novel.title)}
                 >
-                  {busy ? <LoadingSpinner className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {busy ? (
+                    <LoadingSpinner className="h-3.5 w-3.5" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
                 </Button>
               </li>
             )
           })}
         </ul>
+      ) : (
+        currentNovel && (
+          <p className="truncate px-1 text-xs text-muted-foreground">当前：{currentNovel.title}</p>
+        )
       )}
     </div>
   )

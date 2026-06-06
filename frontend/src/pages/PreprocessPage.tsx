@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CheckCircle2, Loader2, Circle, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { PageShell } from '@/components/layout/PageShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -53,33 +53,36 @@ export function PreprocessPage() {
 
   return (
     <>
-      <PageHeader
-        title="预处理进度"
-        description={
-          currentNovel
-            ? `《${currentNovel.title}》· ${apiConnected ? (preprocessWsConnected ? '实时进度已连接' : '同步进度中…') : 'mock 状态映射'}`
-            : '请先上传小说'
-        }
-        actions={
-          canContinue ? (
-            <Button size="sm" onClick={() => navigate('/overview')}>
-              进入概览
-            </Button>
-          ) : undefined
-        }
-      />
-      <div className="flex-1 overflow-auto p-6">
-        <div className="mx-auto max-w-2xl">
+      <PageShell width="md">
           {!currentNovel ? (
-            <p className="text-center text-sm text-muted-foreground">请先在「上传小说」页创建项目</p>
+            <div className="glass-panel rounded-xl px-6 py-12 text-center">
+              <p className="text-sm text-muted-foreground">请先在「上传」页创建项目</p>
+            </div>
           ) : (
             <>
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  《{currentNovel.title}》·{' '}
+                  {apiConnected
+                    ? preprocessWsConnected
+                      ? '实时进度已连接'
+                      : '同步进度中…'
+                    : 'mock 状态映射'}
+                </p>
+                {canContinue && (
+                  <Button size="sm" onClick={() => navigate('/overview')}>
+                    进入概览
+                  </Button>
+                )}
+              </div>
               {preprocessDetail && (
-                <p className="mb-4 text-center text-sm text-muted-foreground">{preprocessDetail}</p>
+                <p className="mb-5 text-center text-sm leading-relaxed text-muted-foreground">
+                  {preprocessDetail}
+                </p>
               )}
               <Card>
-                <CardContent className="p-2">
-                  <ul className="flex flex-col">
+                <CardContent className="p-3">
+                  <ul className="flex flex-col gap-1">
                     {PREPROCESS_STAGE_DEFS.map((s, i) => {
                       const state = states[i]
                       const liveDetail = preprocessStageDetails[i]
@@ -93,8 +96,9 @@ export function PreprocessPage() {
                         <li
                           key={s.name}
                           className={cn(
-                            'flex items-start gap-3 rounded-md p-3',
-                            state === 'running' && 'bg-accent/50',
+                            'flex items-start gap-3 rounded-xl px-3 py-3 transition-colors duration-200',
+                            state === 'running' && 'bg-accent/60 shadow-sm',
+                            state === 'done' && 'opacity-90',
                           )}
                         >
                           <div className="mt-0.5">{stateIcon[state]}</div>
@@ -112,8 +116,7 @@ export function PreprocessPage() {
               </Card>
             </>
           )}
-        </div>
-      </div>
+      </PageShell>
     </>
   )
 }

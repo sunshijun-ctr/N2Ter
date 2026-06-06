@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2, UploadCloud } from 'lucide-react'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { BookOpen, Loader2, UploadCloud } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -128,30 +127,23 @@ export function UploadPage() {
         ? `《${currentNovel.title}》`
         : undefined
 
+  const showReader = !readerCollapsed
+
   return (
     <>
-      <PageHeader
-        title="上传小说"
-        description="左侧上传与选题材，右侧可折叠阅读；预处理期间可先翻阅章节"
-        actions={
-          uploadDone || currentNovel?.status === 'preprocessing' ? (
-            <Button variant="outline" size="sm" onClick={() => navigate('/preprocess')}>
-              查看预处理进度
-            </Button>
-          ) : undefined
-        }
-      />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div
-          className={cn(
-            'flex min-w-0 flex-col overflow-auto p-6 transition-[flex]',
-            readerCollapsed ? 'flex-1' : 'w-full max-w-lg shrink-0 xl:max-w-xl',
-          )}
-        >
-          <div className="mx-auto flex w-full max-w-lg flex-col gap-6">
+      <div
+        className={cn(
+          'grid min-h-0 flex-1 overflow-hidden',
+          showReader
+            ? 'grid-cols-1 lg:grid-cols-[minmax(340px,26rem)_minmax(0,1fr)]'
+            : 'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto]',
+        )}
+      >
+        <div className="min-h-0 overflow-auto border-b border-border/40 lg:border-b-0 lg:border-r lg:border-border/40">
+          <div className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-8 sm:px-8">
             <Card>
-              <CardHeader>
-                <CardTitle>1. 选择小说文件</CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">1. 选择小说文件</CardTitle>
               </CardHeader>
               <CardContent>
                 <input
@@ -170,24 +162,33 @@ export function UploadPage() {
                     e.preventDefault()
                     onFileChange(e.dataTransfer.files[0] ?? null)
                   }}
-                  className="flex w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-10 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                  className={cn(
+                    'flex w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-4 py-12 transition-all duration-200',
+                    'border-border/60 bg-background/40 text-muted-foreground',
+                    'hover:border-primary/40 hover:bg-accent/20 hover:text-foreground',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    file && 'border-primary/30 bg-accent/10',
+                    busy && 'pointer-events-none opacity-50',
+                  )}
                 >
-                  <UploadCloud className="h-8 w-8" />
-                  <span className="text-sm">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                    <UploadCloud className="h-6 w-6" />
+                  </div>
+                  <span className="text-sm font-medium">
                     {file ? file.name : '点击或拖拽 .txt 文件到这里'}
                   </span>
-                  {file && (
-                    <span className="text-xs text-primary">
-                      {(file.size / 1024).toFixed(1)} KB · 右侧可预览
-                    </span>
-                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {file
+                      ? `${(file.size / 1024).toFixed(1)} KB · 右侧可预览章节`
+                      : '支持 .txt（.docx 即将支持）'}
+                  </span>
                 </button>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader>
-                <CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">
                   2. 选择题材
                   <span className="ml-2 text-xs font-normal text-muted-foreground">
                     已选 {selected.length}/3
@@ -204,10 +205,10 @@ export function UploadPage() {
                         type="button"
                         onClick={() => toggleGenre(g)}
                         className={cn(
-                          'rounded-full border px-4 py-1.5 text-sm transition-colors',
+                          'cursor-pointer rounded-full border px-4 py-2 text-sm transition-all duration-200',
                           active
-                            ? 'border-primary bg-primary text-primary-foreground'
-                            : 'border-input hover:bg-secondary',
+                            ? 'border-primary bg-primary text-primary-foreground shadow-soft'
+                            : 'border-border/60 bg-background/50 hover:border-primary/30 hover:bg-secondary/80',
                         )}
                       >
                         {g}
@@ -218,13 +219,20 @@ export function UploadPage() {
               </CardContent>
             </Card>
 
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 pt-2">
               {readerCollapsed && chapters.length > 0 && (
-                <Button variant="outline" onClick={() => handleReaderCollapsed(false)}>
-                  展开阅读面板
+                <Button variant="outline" size="sm" onClick={() => handleReaderCollapsed(false)}>
+                  <BookOpen className="h-4 w-4" />
+                  展开阅读
+                </Button>
+              )}
+              {(uploadDone || currentNovel?.status === 'preprocessing') && (
+                <Button variant="outline" size="sm" onClick={() => navigate('/preprocess')}>
+                  查看预处理进度
                 </Button>
               )}
               <Button
+                className={cn(!readerCollapsed && 'ml-auto')}
                 size="lg"
                 disabled={!file || selected.length === 0 || busy || !apiConnected}
                 onClick={() => void handleStartPreprocess()}
@@ -235,13 +243,13 @@ export function UploadPage() {
             </div>
 
             {uploadDone && (
-              <p className="text-center text-xs text-primary">
+              <p className="rounded-lg bg-primary/5 px-4 py-3 text-center text-xs leading-relaxed text-primary">
                 已提交预处理，可在右侧继续阅读，或前往「预处理进度」查看实时状态
               </p>
             )}
             {!apiConnected && (
               <p className="text-center text-xs text-muted-foreground">
-                启动 backend 后刷新页面，侧边栏显示 API 即可上传
+                启动 backend 后刷新页面，侧边栏显示「在线」即可上传
               </p>
             )}
           </div>

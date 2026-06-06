@@ -22,6 +22,24 @@ class ScreenplayMemoryService:
         base = default_screenplay_memory()
         return {**base, **memory}
 
+    def get_memory_for_prompt(
+        self, screenplay: Screenplay, *, window: int = 4
+    ) -> dict[str, Any]:
+        """Capped view for prompts: keep the most recent ``window`` episodes in
+        full and roll older ones into a compact digest string. Prevents context
+        from ballooning as episode count grows toward 20+."""
+        memory = self.get_memory(screenplay)
+        episodes = memory.get("generated_episodes") or []
+        if len(episodes) <= window:
+            return memory
+        recent = episodes[-window:]
+        older = episodes[:-window]
+        digest = "；".join(
+            f"第{item.get('episode_num')}集：{str(item.get('summary') or '')[:60]}"
+            for item in older
+        )
+        return {**memory, "generated_episodes": recent, "earlier_episodes_digest": digest}
+
     def apply_patch(self, screenplay: Screenplay, patch: dict[str, Any] | None) -> dict[str, Any]:
         memory = self.get_memory(screenplay)
         if not patch:

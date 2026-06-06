@@ -47,10 +47,10 @@ export function DialogueLine({
         requestAnimationFrame(adjustHeight)
       }}
       className={cn(
-        'block w-full min-h-[1.75rem] min-w-[10ch] flex-1 resize-none overflow-hidden',
-        'bg-transparent px-1 py-0.5 text-sm leading-relaxed text-foreground',
-        'border-b border-border/25 outline-none transition-colors',
-        'hover:border-border/45 focus:border-primary/50',
+        'block w-full min-h-[1.75rem] min-w-0 resize-none overflow-hidden',
+        'bg-transparent px-1 py-0.5 font-manuscript text-[15px] leading-relaxed text-foreground',
+        'border-b border-border/30 outline-none transition-colors duration-200',
+        'hover:border-border/50 focus:border-primary/55 focus-visible:ring-0',
         className,
       )}
     />
