@@ -244,7 +244,7 @@ class EpisodeWritingAgentService:
             calls = assistant.get("tool_calls") or []
             if not calls:
                 return await self._parse_or_retry(
-                    messages, assistant.get("content") or ""
+                    messages, self._final_text(assistant)
                 )
 
             tool_names = [(c.get("function") or {}).get("name", "") for c in calls]
@@ -303,7 +303,7 @@ class EpisodeWritingAgentService:
 
         final = await llm_service.chat_with_tools(messages, tools=None, json_mode=True)
         messages.append(final)
-        return await self._parse_or_retry(messages, final.get("content") or "")
+        return await self._parse_or_retry(messages, self._final_text(final))
 
     async def _emit_step(
         self,
@@ -489,23 +489,49 @@ class EpisodeWritingAgentService:
         }
 
     async def _parse_or_retry(
-        self, messages: list[dict[str, Any]], content: str
+        self, messages: list[dict[str, Any]], content: str, *, attempts: int = 3
     ) -> dict[str, Any]:
-        """Parse a stage's final answer; one corrective retry forcing JSON mode."""
-        try:
-            return self._loads(content)
-        except LLMError as exc:
+        """Parse a stage's final answer, with corrective retries forcing JSON
+        mode. Handles two recurring failure modes of the reasoning model: empty
+        ``content`` (everything consumed as reasoning) and minor JSON slips."""
+        last_exc: LLMError | None = None
+        for _ in range(attempts):
+            text = (content or "").strip()
+            if text:
+                try:
+                    return self._loads(text)
+                except LLMError as exc:
+                    last_exc = exc
+                    nudge = f"上一条不是合法 JSON：{exc}。"
+                else:  # pragma: no cover - returned above
+                    pass
+            else:
+                last_exc = LLMError("Agent returned empty content")
+                nudge = "你上一条返回了空内容。"
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        f"上一条不是合法 JSON：{exc}。请只输出合法 JSON 对象，"
-                        "不要 Markdown、不要解释。"
+                        nudge + "现在请**只输出一个合法 JSON 对象**：不要解释、不要 Markdown 包裹、"
+                        "不要把答案放进思考里，直接给 JSON。"
                     ),
                 }
             )
-            retry = await llm_service.chat_with_tools(messages, tools=None, json_mode=True)
-            return self._loads(retry.get("content") or "")
+            resp = await llm_service.chat_with_tools(messages, tools=None, json_mode=True)
+            messages.append(resp)
+            content = self._final_text(resp)
+        raise last_exc or LLMError("Agent produced no valid JSON after retries")
+
+    @staticmethod
+    def _final_text(msg: dict[str, Any]) -> str:
+        """Extract a stage's answer text. Reasoning models (deepseek-v4-flash)
+        sometimes leave ``content`` empty and put the actual answer — including a
+        JSON draft — in ``reasoning_content``; fall back to it so an empty
+        ``content`` does not fail the whole episode."""
+        text = (msg.get("content") or "").strip()
+        if text:
+            return text
+        return (msg.get("reasoning_content") or "").strip()
 
     def _build_system_prompt(self, screenplay: Screenplay) -> str:
         parts = []
