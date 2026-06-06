@@ -6,13 +6,20 @@ FastAPI backend scaffold for the AI novel-to-screenplay tool.
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
+E:\miniconda3\envs\N2Ter\python.exe -m pip install -e ".[dev]"
+E:\miniconda3\envs\N2Ter\python.exe -m uvicorn app.main:app --reload
 ```
 
 API health check: `GET /health`
+
+## Database
+
+The first migration reuses `../db/ddl.sql`.
+
+```powershell
+cd backend
+E:\miniconda3\envs\N2Ter\python.exe -m alembic upgrade head
+```
 
 ## Docker
 

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import Conversation
+from app.models import Conversation, Message
 from app.schemas import ConversationCreate, ConversationRead, MessageRead
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -38,7 +38,12 @@ async def list_messages(conversation_id: UUID, db: AsyncSession = Depends(get_db
     conversation = await db.get(Conversation, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return []
+    result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    return list(result.scalars())
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

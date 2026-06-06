@@ -8,10 +8,10 @@ from app.schemas.common import Timestamped
 
 
 class ConversationCreate(BaseModel):
-    novel_id: UUID | None = None
+    novel_id: UUID
     screenplay_id: UUID | None = None
     context_type: ConversationContext = ConversationContext.conversation
-    title: str = "新对话"
+    title: str | None = "新对话"
 
 
 class ConversationRead(Timestamped):
@@ -25,5 +25,9 @@ class ConversationRead(Timestamped):
 class MessageRead(BaseModel):
     id: UUID
     role: MessageRole
-    content: str
-    metadata: dict[str, Any] = {}
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_results: list[dict[str, Any]] | None = None
+    token_usage: dict[str, Any] | None = None
+    is_pinned: bool = False
+    is_compressed: bool = False

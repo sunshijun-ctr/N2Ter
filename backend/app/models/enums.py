@@ -43,11 +43,30 @@ class TaskStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class CharacterRole(str, enum.Enum):
+    protagonist = "protagonist"
+    supporting = "supporting"
+    minor = "minor"
+
+
+class QualityLevel(str, enum.Enum):
+    excellent = "excellent"
+    good = "good"
+    degraded = "degraded"
+    poor = "poor"
+    fallback = "fallback"
+
+
 class ConversationContext(str, enum.Enum):
     preprocessing = "preprocessing"
     planning = "planning"
     generation = "generation"
     conversation = "conversation"
+
+
+class ConversationStatus(str, enum.Enum):
+    active = "active"
+    archived = "archived"
 
 
 class MessageRole(str, enum.Enum):
@@ -61,3 +80,10 @@ class ExportFormat(str, enum.Enum):
     yaml = "yaml"
     pdf = "pdf"
     zip = "zip"
+
+
+class ExportStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"

@@ -34,10 +34,9 @@ services:
       POSTGRES_USER: n2ter
       POSTGRES_PASSWORD: n2ter
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../../db/ddl.sql:/docker-entrypoint-initdb.d/001-ddl.sql:ro
 
   redis:
     image: redis:7

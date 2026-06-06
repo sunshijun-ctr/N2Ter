@@ -1,4 +1,3 @@
-from typing import Any
 from uuid import UUID
 
 from app.models.enums import TaskStatus, TaskType
@@ -8,8 +7,10 @@ from app.schemas.common import Timestamped
 class TaskRead(Timestamped):
     id: UUID
     task_type: TaskType
+    novel_id: UUID | None = None
+    episode_id: UUID | None = None
+    celery_id: str | None = None
     status: TaskStatus
     progress: int
-    payload: dict[str, Any] = {}
-    result: dict[str, Any] | None = None
     error_message: str | None = None
+    retry_count: int

@@ -6,13 +6,13 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-ROOT_DIR = BASE_DIR.parent
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8")
 
     app_name: str = "N2Ter Backend"
     environment: Literal["local", "test", "production"] = "local"
@@ -24,10 +24,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    prompt_dir: Path = ROOT_DIR / "prompts"
-    schema_dir: Path = ROOT_DIR / "Schema" / "V1"
-    skill_dir: Path = ROOT_DIR / "skills"
-    storage_dir: Path = BASE_DIR / "storage"
+    prompt_dir: Path = PROJECT_ROOT / "prompts"
+    schema_dir: Path = PROJECT_ROOT / "Schema" / "V1"
+    skill_dir: Path = PROJECT_ROOT / "skills"
+    storage_dir: Path = BACKEND_DIR / "storage"
 
 
 @lru_cache

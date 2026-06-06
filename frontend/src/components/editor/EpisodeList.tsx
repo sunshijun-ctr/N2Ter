@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { CheckCircle2, Loader2, Circle, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { mockEpisodes } from '@/lib/mock'
+import { useAppStore } from '@/stores/useAppStore'
 import type { EpisodeStatus } from '@/lib/types'
 
 const statusIcon: Record<EpisodeStatus, ReactNode> = {
@@ -11,27 +11,35 @@ const statusIcon: Record<EpisodeStatus, ReactNode> = {
   failed: <XCircle className="h-4 w-4 text-destructive" />,
 }
 
-export function EpisodeList({
-  activeId,
-  onSelect,
-}: {
-  activeId: string
-  onSelect: (id: string) => void
-}) {
+export function EpisodeList() {
+  const { getEpisodes, activeEpisodeId, setActiveEpisode } = useAppStore()
+  const episodes = getEpisodes()
+
+  if (episodes.length === 0) {
+    return (
+      <div className="flex w-56 shrink-0 flex-col border-r bg-card p-4 text-xs text-muted-foreground">
+        当前项目暂无分集数据
+      </div>
+    )
+  }
+
   return (
     <div className="flex w-56 shrink-0 flex-col border-r bg-card">
       <div className="flex h-12 items-center justify-between border-b px-4 text-sm font-medium">
         分集
-        <span className="text-xs text-muted-foreground">{mockEpisodes.length}</span>
+        <span className="text-xs text-muted-foreground">{episodes.length}</span>
       </div>
       <ul className="flex-1 overflow-auto p-2">
-        {mockEpisodes.map((ep) => (
+        {episodes.map((ep) => (
           <li key={ep.id}>
             <button
-              onClick={() => onSelect(ep.id)}
+              type="button"
+              onClick={() => setActiveEpisode(ep.id)}
               className={cn(
                 'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors',
-                ep.id === activeId ? 'bg-accent text-accent-foreground' : 'hover:bg-secondary',
+                ep.id === activeEpisodeId
+                  ? 'bg-accent text-accent-foreground'
+                  : 'hover:bg-secondary',
               )}
             >
               {statusIcon[ep.status]}

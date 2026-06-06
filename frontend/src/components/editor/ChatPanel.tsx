@@ -3,15 +3,22 @@ import { SendHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ToolCallCard } from './ToolCallCard'
 import { cn } from '@/lib/utils'
+import { useAppStore } from '@/stores/useAppStore'
 import { mockMessages } from '@/lib/mock'
 
 export function ChatPanel() {
   const [input, setInput] = useState('')
+  const activeEpisode = useAppStore((s) => s.getActiveEpisode())
 
   return (
     <div className="flex w-[380px] shrink-0 flex-col border-l bg-card">
       <div className="flex h-12 items-center border-b px-4 text-sm font-medium">
         对话修改
+        {activeEpisode && (
+          <span className="ml-2 truncate text-xs font-normal text-muted-foreground">
+            · 第 {activeEpisode.episodeNum} 集
+          </span>
+        )}
       </div>
 
       <div className="flex-1 space-y-4 overflow-auto p-4">

@@ -60,11 +60,11 @@ async def start_preprocess(novel_id: UUID, db: AsyncSession = Depends(get_db)) -
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
     task = Task(
-        task_type=TaskType.preprocess.value,
-        status=TaskStatus.pending.value,
-        payload={"novel_id": str(novel_id)},
+        task_type=TaskType.preprocess,
+        status=TaskStatus.pending,
+        novel_id=novel_id,
     )
-    novel.status = NovelStatus.preprocessing.value
+    novel.status = NovelStatus.preprocessing
     db.add(task)
     await db.commit()
     await db.refresh(task)

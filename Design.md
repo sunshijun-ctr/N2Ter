@@ -1831,9 +1831,10 @@ class PromptLoader:
 ☐ 仙侠玄幻
 ☐ 都市情感
 ☐ 悬疑推理
-☐ AI 短剧分镜
 
 每个选项配说明文字和样例书目，帮用户判断。
+
+> **注**：「AI 短剧分镜」不是小说题材，已从本步骤移除；选择 **Schema · AI 视频版** 时自动加载 `skill_ai_shorts`（见 10.2.3 / Schema 选择流程）。
 ```
 
 **为什么强制选**：
@@ -1865,7 +1866,7 @@ skills/
   ├─ skill_ancient_power/       # 古装权谋
   ├─ skill_wuxia/               # 武侠
   ├─ skill_suspense/            # 悬疑推理
-  └─ skill_ai_shorts/           # AI 短剧分镜
+  └─ skill_ai_shorts/           # AI 短剧分镜（选 Schema · AI 视频版 时加载，非上传题材）
 
 每个 skill 内部：
   ├─ SKILL.md                   # 给 agent 看的指令

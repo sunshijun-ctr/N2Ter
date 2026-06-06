@@ -2,17 +2,35 @@ import { CheckCircle2, Loader2, Circle } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { useAppStore } from '@/stores/useAppStore'
+import type { NovelStatus } from '@/lib/types'
 
 type StageState = 'done' | 'running' | 'pending'
 
-const stages: { name: string; desc: string; state: StageState }[] = [
-  { name: '章节拆分', desc: '已拆分 80 章', state: 'done' },
-  { name: '章节处理', desc: '摘要 / 关键事件 / 语义切片（62/80）', state: 'running' },
-  { name: '全书分析', desc: '全书摘要 · 角色弧光 · 伏笔索引', state: 'pending' },
-  { name: '向量化入库', desc: 'BGE-M3 → Chroma', state: 'pending' },
-  { name: '题材二次确认', desc: 'AI 校验用户所选题材', state: 'pending' },
-  { name: '概览版生成', desc: '自动产出全书改编报告', state: 'pending' },
+const statusStages: Record<NovelStatus, StageState[]> = {
+  uploaded: ['pending', 'pending', 'pending', 'pending', 'pending', 'pending'],
+  preprocessing: ['done', 'running', 'pending', 'pending', 'pending', 'pending'],
+  ready_for_planning: ['done', 'done', 'done', 'done', 'done', 'done'],
+  preprocessing_failed: ['done', 'done', 'pending', 'pending', 'pending', 'pending'],
+}
+
+const stageDefs = [
+  { name: '章节拆分', descKey: 'split' as const },
+  { name: '章节处理', descKey: 'chapters' as const },
+  { name: '全书分析', descKey: 'analysis' as const },
+  { name: '向量化入库', descKey: 'vectorize' as const },
+  { name: '题材二次确认', descKey: 'genre' as const },
+  { name: '概览版生成', descKey: 'overview' as const },
 ]
+
+const stageDesc: Record<string, string> = {
+  split: '已拆分章节',
+  chapters: '摘要 / 关键事件 / 语义切片',
+  analysis: '全书摘要 · 角色弧光 · 伏笔索引',
+  vectorize: 'BGE-M3 → Chroma',
+  genre: 'AI 校验用户所选题材',
+  overview: '自动产出全书改编报告',
+}
 
 const stateIcon = {
   done: <CheckCircle2 className="h-5 w-5 text-primary" />,
@@ -21,36 +39,54 @@ const stateIcon = {
 }
 
 export function PreprocessPage() {
+  const { currentNovel } = useAppStore()
+  const states = currentNovel ? statusStages[currentNovel.status] : statusStages.preprocessing
+
   return (
     <>
-      <PageHeader title="预处理进度" description="WebSocket 实时推送（骨架阶段为静态示例）" />
+      <PageHeader
+        title="预处理进度"
+        description={
+          currentNovel
+            ? `《${currentNovel.title}》· WebSocket 实时推送（当前为 mock 状态映射）`
+            : 'WebSocket 实时推送（骨架阶段为静态示例）'
+        }
+      />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl">
-          <Card>
-            <CardContent className="p-2">
-              <ul className="flex flex-col">
-                {stages.map((s, i) => (
-                  <li
-                    key={s.name}
-                    className={cn(
-                      'flex items-start gap-3 rounded-md p-3',
-                      s.state === 'running' && 'bg-accent/50',
-                    )}
-                  >
-                    <div className="mt-0.5">{stateIcon[s.state]}</div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">
-                          Stage {i + 1} · {s.name}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{s.desc}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          {!currentNovel ? (
+            <p className="text-center text-sm text-muted-foreground">请先在侧边栏选择项目</p>
+          ) : (
+            <Card>
+              <CardContent className="p-2">
+                <ul className="flex flex-col">
+                  {stageDefs.map((s, i) => {
+                    const state = states[i]
+                    return (
+                      <li
+                        key={s.name}
+                        className={cn(
+                          'flex items-start gap-3 rounded-md p-3',
+                          state === 'running' && 'bg-accent/50',
+                        )}
+                      >
+                        <div className="mt-0.5">{stateIcon[state]}</div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium">
+                            Stage {i + 1} · {s.name}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {stageDesc[s.descKey]}
+                            {currentNovel.status === 'preprocessing' && i === 1 && '（进行中）'}
+                          </p>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </>
