@@ -139,7 +139,7 @@ export function Canvas() {
       ? `第 ${episode.sourceChapters[0]} 章`
       : `第 ${episode.sourceChapters[0]}–${episode.sourceChapters.at(-1)} 章`
 
-  const scenes = episode.content.scenes
+  const scenes = episode.content.scenes ?? []
 
   return (
     <div className="relative flex-1 overflow-auto bg-background p-6">

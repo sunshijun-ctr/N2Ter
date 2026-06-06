@@ -11,7 +11,10 @@ x-app-env: &app-env
   CHROMA_HOST: chroma
   CHROMA_PORT: "8000"
   ASYNC_TASKS_ENABLED: "${ASYNC_TASKS_ENABLED:-true}"
+  PREPROCESS_CONCURRENCY: "${PREPROCESS_CONCURRENCY:-5}"
   # LLM (OpenAI-compatible). Empty key -> deterministic fallback mode.
+  # LLM_PROVIDER=deepseek auto-fills base_url + model (key still required).
+  LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
   LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
   LLM_API_KEY: "${LLM_API_KEY:-}"
   LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"

@@ -24,6 +24,18 @@ export interface ApiNovelCreate {
   genres: string[]
 }
 
+export interface ApiChapterRead extends ApiTimestamped {
+  id: string
+  novel_id: string
+  chapter_num: number
+  title: string
+  content: string
+  word_count: number
+  summary?: string | null
+  special_type?: string | null
+  needs_sub_split: boolean
+}
+
 export interface ApiScreenplayRead extends ApiTimestamped {
   id: string
   novel_id: string

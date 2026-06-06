@@ -42,6 +42,15 @@ export interface Novel extends Timestamped {
   summary?: string
 }
 
+export interface NovelChapter {
+  id?: string
+  chapterNum: number
+  title: string
+  content: string
+  wordCount?: number
+  summary?: string
+}
+
 export interface Screenplay extends Timestamped {
   id: string
   novelId: string
@@ -67,7 +76,9 @@ export interface Scene {
 }
 
 export interface EpisodeContent {
-  scenes: Scene[]
+  scenes?: Scene[]
+  /** overview 等 schema 的完整 JSON 文档字段 */
+  [key: string]: unknown
 }
 
 export interface Episode extends Timestamped {
@@ -150,6 +161,22 @@ export interface AdaptationPlan {
   episodeCount: number
   items: AdaptationPlanItem[]
   reasoning?: string
+}
+
+/** 概览版剧本文档（backend overview schema / Stage 6） */
+export interface OverviewEpisodeSummary {
+  episodeNum: number
+  title: string
+  oneLineSummary: string
+}
+
+export interface OverviewData {
+  logline: string
+  marketComparable: string
+  adaptationDifficulty: string
+  estimatedEpisodes: number
+  episodes: OverviewEpisodeSummary[]
+  isFallback?: boolean
 }
 
 export interface SchemaOption {

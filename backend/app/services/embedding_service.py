@@ -126,8 +126,8 @@ class EmbeddingService:
 
     async def _call_api(self, texts: list[str]) -> list[list[float]]:
         settings = self._settings
-        url = settings.effective_embedding_base_url.rstrip("/") + "/embeddings"
-        headers = {"Authorization": f"Bearer {settings.effective_embedding_api_key}"}
+        url = settings.embedding_base_url.rstrip("/") + "/embeddings"
+        headers = {"Authorization": f"Bearer {settings.embedding_api_key}"}
         body = {"model": settings.embedding_model, "input": texts}
         async with httpx.AsyncClient(timeout=settings.embedding_timeout_seconds) as client:
             response = await client.post(url, json=body, headers=headers)

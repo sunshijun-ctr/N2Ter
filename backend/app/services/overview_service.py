@@ -63,7 +63,11 @@ class OverviewService:
             status=ScreenplayStatus.completed,
             is_auto_generated=True,
             quality=quality,
-            adaptation_plan={},
+            # Mirror the document's episode breakdown into ``adaptation_plan`` so
+            # the overview screenplay is renderable through the same plan-based UI
+            # path as ordinary screenplays (the full document still lives on the
+            # episode below).
+            adaptation_plan=self._adaptation_plan_from_document(document, chapters),
             style_preferences={"title": f"{novel.title} 概览版"},
         )
         db.add(screenplay)
@@ -80,6 +84,48 @@ class OverviewService:
         db.add(episode)
         await db.flush()
         return screenplay, episode
+
+    def _adaptation_plan_from_document(
+        self, document: dict, chapters: list[Chapter]
+    ) -> dict:
+        """Project the overview document's episode list into the ``adaptation_plan``
+        shape the frontend reads (``episode_num`` / ``source_chapters`` /
+        ``one_line_summary``). The overview schema uses ``episode_number`` and a
+        single ``source_chapter`` (often a chapter *title*), so we normalise both
+        here and resolve chapter references to integer chapter numbers — never
+        titles — so the plan can drive episode creation downstream."""
+        title_to_num = {ch.title: ch.chapter_num for ch in chapters}
+        doc_episodes = document.get("episodes") or []
+        episodes = []
+        for index, ep in enumerate(doc_episodes, start=1):
+            if not isinstance(ep, dict):
+                continue
+            raw = ep.get("source_chapters")
+            candidates = raw if isinstance(raw, list) else [raw if raw is not None else ep.get("source_chapter")]
+            source_chapters: list[int] = []
+            for candidate in candidates:
+                if isinstance(candidate, bool):
+                    continue
+                if isinstance(candidate, int):
+                    source_chapters.append(candidate)
+                elif isinstance(candidate, str) and candidate.strip().isdigit():
+                    source_chapters.append(int(candidate.strip()))
+                elif candidate in title_to_num:
+                    source_chapters.append(title_to_num[candidate])
+            episodes.append(
+                {
+                    "episode_num": ep.get("episode_number") or ep.get("episode_num") or index,
+                    "title": ep.get("title") or f"第 {index} 集",
+                    "source_chapters": source_chapters,
+                    "one_line_summary": ep.get("one_line_summary") or ep.get("summary") or "",
+                }
+            )
+        return {
+            "episode_count": len(episodes) if episodes else document.get("estimated_episodes") or 0,
+            "chapters_per_episode": max(len(chapters) // max(len(episodes), 1), 1),
+            "total_chapters": len(chapters),
+            "episodes": episodes,
+        }
 
     async def _generate_with_llm(self, novel: Novel, chapters: list[Chapter]) -> dict:
         system_prompt = prompt_loader.load("generation_agent")

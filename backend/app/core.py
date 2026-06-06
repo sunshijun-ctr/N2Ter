@@ -2,13 +2,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
+
+# Known OpenAI-compatible providers. Selecting one via ``LLM_PROVIDER`` fills the
+# base URL + a sensible default model so callers only need to supply the API key;
+# explicit LLM_BASE_URL / LLM_MODEL always take precedence (see the validator).
+LLM_PRESETS: dict[str, dict[str, str]] = {
+    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    "deepseek": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
+}
 
 
 class Settings(BaseSettings):
@@ -34,6 +42,11 @@ class Settings(BaseSettings):
     # progress endpoints. When False they run inline and complete in-request.
     async_tasks_enabled: bool = False
 
+    # Max chapters processed concurrently during LLM preprocessing (the LLM
+    # calls run in parallel; DB writes stay sequential). Bounded to respect
+    # provider rate limits. Raise it if your quota allows.
+    preprocess_concurrency: int = 5
+
     # ----- Conversation auto-compression (Design.md §10.4.3) -----
     auto_compress_enabled: bool = True
     context_window_tokens: int = 200_000
@@ -56,6 +69,9 @@ class Settings(BaseSettings):
 
     # ----- LLM (OpenAI-compatible Chat Completions) -----
     # Leave llm_api_key empty to keep the deterministic fallback behaviour.
+    # Set llm_provider (e.g. "deepseek") to auto-fill base_url + model; or set
+    # llm_base_url / llm_model explicitly for any other OpenAI-compatible API.
+    llm_provider: str = "openai"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
@@ -63,8 +79,23 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
     llm_timeout_seconds: float = 120.0
 
+    @model_validator(mode="after")
+    def _apply_llm_provider(self) -> "Settings":
+        """Resolve a named provider preset into base_url / model, leaving any
+        value the user set explicitly untouched (explicit config wins)."""
+        preset = LLM_PRESETS.get(self.llm_provider.strip().lower())
+        if preset:
+            openai_defaults = LLM_PRESETS["openai"]
+            if self.llm_base_url == openai_defaults["base_url"]:
+                self.llm_base_url = preset["base_url"]
+            if self.llm_model == openai_defaults["model"]:
+                self.llm_model = preset["model"]
+        return self
+
     # ----- Embedding (OpenAI-compatible /embeddings) -----
-    # Falls back to llm_api_key / a sibling base_url when left empty.
+    # Configured independently from the LLM (its own endpoint + key, no fallback
+    # to the LLM credentials). Leave embedding_base_url / embedding_api_key empty
+    # to use offline deterministic pseudo-vectors.
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = "bge-m3"
@@ -93,16 +124,8 @@ class Settings(BaseSettings):
         return bool(self.llm_api_key and self.llm_base_url and self.llm_model)
 
     @property
-    def effective_embedding_base_url(self) -> str:
-        return self.embedding_base_url or self.llm_base_url
-
-    @property
-    def effective_embedding_api_key(self) -> str:
-        return self.embedding_api_key or self.llm_api_key
-
-    @property
     def embedding_enabled(self) -> bool:
-        return bool(self.effective_embedding_api_key and self.effective_embedding_base_url)
+        return bool(self.embedding_api_key and self.embedding_base_url)
 
     @property
     def rerank_enabled(self) -> bool:

@@ -1,0 +1,37 @@
+# Local development overrides — auto-merged by `docker compose` on top of
+# docker-compose.yml. Bind-mounts the source into the api/worker containers and
+# runs them under file-watchers so code edits hot-reload without a rebuild.
+#
+# Usage (from this directory):
+#   docker compose up -d            # picks up this override automatically
+#
+# To run the production-style images WITHOUT hot reload (ignore this file):
+#   docker compose -f docker-compose.yml up -d --build
+#
+# Notes:
+# - Only ./app (+ prompts/Schema for runtime templates) is mounted, so the
+#   image's installed dependencies and the app_storage volume are untouched.
+# - uvicorn --reload and the watchfiles CLI both ship with uvicorn[standard],
+#   which is already a dependency — no image rebuild needed.
+
+services:
+  api:
+    volumes:
+      - ../app:/app/backend/app
+      - ../alembic:/app/backend/alembic
+      - ../../prompts:/app/prompts
+      - ../../Schema:/app/Schema
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/backend/app
+
+  worker:
+    volumes:
+      - ../app:/app/backend/app
+      - ../../prompts:/app/prompts
+      - ../../Schema:/app/Schema
+    command:
+      - sh
+      - -c
+      - watchfiles "celery -A app.workers.celery_app.celery_app worker --loglevel=info" /app/backend/app

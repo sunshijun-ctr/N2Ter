@@ -1,5 +1,6 @@
 import type {
   ApiAdaptationPlanRead,
+  ApiChapterRead,
   ApiEpisodeRead,
   ApiExportRead,
   ApiMessageRead,
@@ -23,7 +24,10 @@ import type {
   Message,
   MessageRole,
   Novel,
+  NovelChapter,
   NovelStatus,
+  OverviewData,
+  OverviewEpisodeSummary,
   Scene,
   SceneDialogue,
   SchemaType,
@@ -37,6 +41,17 @@ import type {
 
 function mapTimestamps(dto: { created_at: string; updated_at: string }) {
   return { createdAt: dto.created_at, updatedAt: dto.updated_at }
+}
+
+export function mapChapter(dto: ApiChapterRead): NovelChapter {
+  return {
+    id: dto.id,
+    chapterNum: dto.chapter_num,
+    title: dto.title,
+    content: dto.content,
+    wordCount: dto.word_count,
+    summary: dto.summary ?? undefined,
+  }
 }
 
 export function mapNovel(dto: ApiNovelRead | ApiNovelListItem): Novel {
@@ -85,8 +100,12 @@ export function mapAdaptationPlanFromDict(raw: Record<string, unknown>): Adaptat
   if (!raw || typeof raw !== 'object') return undefined
   const episodes = (raw.episodes as ApiAdaptationPlanRead['episodes']) ?? []
   if (!Array.isArray(episodes)) return undefined
+  const totalFromRaw = Number(raw.total_chapters ?? raw.totalChapters ?? 0)
+  const maxChapter = episodes
+    .flatMap((ep) => ep.source_chapters ?? [])
+    .reduce((m, n) => Math.max(m, n), 0)
   return {
-    totalChapters: Number(raw.total_chapters ?? raw.totalChapters ?? 0) || episodes.length,
+    totalChapters: totalFromRaw || maxChapter || episodes.length,
     episodeCount: Number(raw.episode_count ?? raw.episodeCount ?? episodes.length),
     items: episodes.map((ep) => ({
       episodeNum: Number(ep.episode_num),
@@ -95,6 +114,79 @@ export function mapAdaptationPlanFromDict(raw: Record<string, unknown>): Adaptat
       oneLineSummary: ep.one_line_summary,
     })),
     reasoning: typeof raw.reasoning === 'string' ? raw.reasoning : undefined,
+  }
+}
+
+function parseOverviewEpisodesFromDoc(raw: Record<string, unknown>): OverviewEpisodeSummary[] {
+  const docEpisodes = Array.isArray(raw.episodes) ? raw.episodes : []
+  return docEpisodes
+    .filter((ep): ep is Record<string, unknown> => ep != null && typeof ep === 'object')
+    .map((ep, index) => ({
+      episodeNum: Number(ep.episode_number ?? ep.episode_num ?? index + 1),
+      title: String(ep.title ?? `第 ${index + 1} 集`),
+      oneLineSummary: String(ep.one_line_summary ?? ep.summary ?? ''),
+    }))
+}
+
+function mapOverviewEpisodesFromPlan(plan?: AdaptationPlan): OverviewEpisodeSummary[] {
+  if (!plan?.items.length) return []
+  return plan.items.map((item) => ({
+    episodeNum: item.episodeNum,
+    title: item.title,
+    oneLineSummary: item.oneLineSummary ?? item.title,
+  }))
+}
+
+/** 从 overview episode.content 或 screenplay.adaptation_plan 解析概览展示数据 */
+export function mapOverviewDocument(
+  doc: Record<string, unknown> | null | undefined,
+  plan?: AdaptationPlan,
+): OverviewData {
+  const raw = doc ?? {}
+  const docEpisodes = parseOverviewEpisodesFromDoc(raw)
+  const planEpisodes = mapOverviewEpisodesFromPlan(plan)
+
+  // 文档 episodes 为权威来源；仅当文档无列表时才用 adaptation_plan
+  const resolvedEpisodes = docEpisodes.length > 0 ? docEpisodes : planEpisodes
+
+  // 建议集数必须与分集大纲条数一致（勿单独采用 estimated_episodes / plan.episodeCount）
+  const estimatedEpisodes =
+    resolvedEpisodes.length > 0
+      ? resolvedEpisodes.length
+      : Math.max(
+          Number(raw.estimated_episodes ?? 0),
+          Number(plan?.episodeCount ?? 0),
+          1,
+        )
+
+  return {
+    logline: String(raw.logline ?? ''),
+    marketComparable: String(raw.market_comparable ?? ''),
+    adaptationDifficulty: String(raw.adaptation_difficulty ?? ''),
+    estimatedEpisodes,
+    episodes: resolvedEpisodes,
+    isFallback: Boolean(raw.is_fallback),
+  }
+}
+
+/** 概览版尚未生成时，用章节数估算（与 backend fallback 一致：max(chapters//2, 1)） */
+export function buildOverviewFallback(
+  novel: Novel,
+  chapters: NovelChapter[],
+): OverviewData {
+  const estimated = Math.max(Math.ceil(chapters.length / 2), 1)
+  const episodes = chapters.slice(0, estimated).map((ch) => ({
+    episodeNum: ch.chapterNum,
+    title: ch.title,
+    oneLineSummary: ch.summary ?? ch.title,
+  }))
+  return {
+    logline: novel.summary ?? '预处理完成后将自动生成 Logline',
+    marketComparable: '待 AI 分析',
+    adaptationDifficulty: chapters.length ? '待评估' : '需先完成预处理',
+    estimatedEpisodes: episodes.length,
+    episodes,
+    isFallback: true,
   }
 }
 
@@ -120,7 +212,10 @@ function mapDialogue(raw: Record<string, unknown>, index: number): SceneDialogue
 export function mapEpisodeContent(content: Record<string, unknown> | null | undefined): EpisodeContent {
   if (!content) return { scenes: [] }
   const scenesRaw = (content.scenes as Record<string, unknown>[]) ?? []
-  return { scenes: scenesRaw.map((s, i) => mapScene(s, i)) }
+  return {
+    ...content,
+    scenes: scenesRaw.map((s, i) => mapScene(s, i)),
+  }
 }
 
 /** 画布编辑格式 → 写入后端的 JSONB（保留 scenes 数组，合并原有 metadata） */
@@ -130,7 +225,7 @@ export function toEpisodeContentPayload(
 ): Record<string, unknown> {
   return {
     ...(existing ?? {}),
-    scenes: content.scenes.map((s, i) => ({
+    scenes: (content.scenes ?? []).map((s, i) => ({
       id: s.id,
       scene_number: i + 1,
       heading: s.heading,

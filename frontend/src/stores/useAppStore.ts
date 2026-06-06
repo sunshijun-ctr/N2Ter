@@ -8,6 +8,7 @@ import type {
   EpisodeContent,
   ExportFormat,
   Novel,
+  OverviewData,
   Scene,
   SceneDialogue,
   SchemaType,
@@ -20,6 +21,7 @@ import {
   mockEpisodesByScreenplay,
   mockNovels,
   getScreenplayForNovel,
+  getOverviewScreenplay,
 } from '@/lib/mock'
 import { buildAdaptationPlan } from '@/lib/adaptation'
 import {
@@ -30,6 +32,8 @@ import {
 } from '@/lib/preprocess-stages'
 import {
   pickScreenplay,
+  mapOverviewDocument,
+  buildOverviewFallback,
   toAdaptationPlanPayload,
   toEpisodeContentPayload,
 } from '@/lib/mappers'
@@ -75,6 +79,9 @@ interface AppState {
   chatSending: boolean
   chatReady: boolean
 
+  overviewData: OverviewData | null
+  overviewLoading: boolean
+
   hydrateFromApi: () => Promise<void>
   uploadAndPreprocess: (file: File, genres: string[]) => Promise<string | null>
   refreshNovel: (novelId: string) => Promise<void>
@@ -89,6 +96,7 @@ interface AppState {
   confirmPlan: () => Promise<void>
   resetPlanFlow: () => void
   fetchAdaptationPlan: (chaptersPerEpisode?: number) => Promise<void>
+  loadOverview: () => Promise<void>
 
   setActiveEpisode: (id: string) => void
   getActiveEpisode: () => Episode | undefined
@@ -164,6 +172,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatStreamingTools: [],
   chatSending: false,
   chatReady: false,
+
+  overviewData: null,
+  overviewLoading: false,
 
   hydrateFromApi: async () => {
     try {
@@ -250,7 +261,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       onDone: () => {
         set({ preprocessDone: true })
         const novelId = get().currentNovel?.id
-        if (novelId) void get().refreshNovel(novelId)
+        // Reload screenplay + adaptation plan (not just the novel) so the
+        // auto-generated overview screenplay and its episode breakdown are
+        // available on the overview page without a manual page refresh.
+        if (novelId) void get().switchNovel(novelId)
       },
     })
   },
@@ -421,6 +435,52 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ adaptationPlan: buildAdaptationPlan(chapters, epCount, novel.title) })
   },
 
+  loadOverview: async () => {
+    const novel = get().currentNovel
+    if (!novel) {
+      set({ overviewData: null })
+      return
+    }
+    set({ overviewLoading: true })
+    try {
+      if (get().apiConnected) {
+        const screenplays = await api.screenplays.listByNovel(novel.id)
+        const overviewSp = screenplays.find((s) => s.schemaType === 'overview')
+        if (overviewSp) {
+          const episodes = await api.episodes.list(overviewSp.id)
+          const doc = episodes[0]?.content as unknown as Record<string, unknown> | undefined
+          set({
+            overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan),
+          })
+          return
+        }
+        const chapters = await api.novels.chapters.list(novel.id)
+        set({ overviewData: buildOverviewFallback(novel, chapters) })
+        return
+      }
+
+      const overviewSp = getOverviewScreenplay(novel.id)
+      if (overviewSp) {
+        const episodes = get().episodesByScreenplay[overviewSp.id] ?? []
+        const doc = episodes[0]?.content as Record<string, unknown> | undefined
+        set({
+          overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan),
+        })
+        return
+      }
+      set({
+        overviewData: buildOverviewFallback(
+          novel,
+          [],
+        ),
+      })
+    } catch (e) {
+      set({ globalError: e instanceof ApiError ? e.message : '加载概览版失败' })
+    } finally {
+      set({ overviewLoading: false })
+    }
+  },
+
   setActiveEpisode: (id) => set({ activeEpisodeId: id }),
 
   getActiveEpisode: () => {
@@ -444,7 +504,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
           content: {
-            scenes: ep.content.scenes.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)),
+            scenes: (ep.content.scenes ?? []).map((s) => (s.id === sceneId ? { ...s, ...patch } : s)),
           },
         })),
       }
@@ -460,7 +520,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
           content: {
-            scenes: ep.content.scenes.map((s) =>
+            scenes: (ep.content.scenes ?? []).map((s) =>
               s.id !== sceneId
                 ? s
                 : {
@@ -501,7 +561,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
-          content: { scenes: [...ep.content.scenes, newScene] },
+          content: { scenes: [...(ep.content.scenes ?? []), newScene] },
         })),
       }
     })
@@ -515,7 +575,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
-          content: { scenes: ep.content.scenes.filter((s) => s.id !== sceneId) },
+          content: { scenes: (ep.content.scenes ?? []).filter((s) => s.id !== sceneId) },
         })),
       }
     })
@@ -535,7 +595,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
           content: {
-            scenes: ep.content.scenes.map((s) =>
+            scenes: (ep.content.scenes ?? []).map((s) =>
               s.id === sceneId ? { ...s, dialogues: [...s.dialogues, newDialogue] } : s,
             ),
           },
@@ -553,7 +613,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
           ...ep,
           content: {
-            scenes: ep.content.scenes.map((s) =>
+            scenes: (ep.content.scenes ?? []).map((s) =>
               s.id === sceneId
                 ? { ...s, dialogues: s.dialogues.filter((d) => d.id !== dialogueId) }
                 : s,

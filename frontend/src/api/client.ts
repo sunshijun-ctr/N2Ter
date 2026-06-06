@@ -18,11 +18,13 @@ import type {
   ApiScreenplayRead,
   ApiTaskRead,
   ApiTaskRef,
+  ApiChapterRead,
   ApiConversationRead,
   ApiMessageRead,
 } from '@/lib/api-types'
 import {
   mapAdaptationPlan,
+  mapChapter,
   mapEpisode,
   mapExport,
   mapNovel,
@@ -38,6 +40,7 @@ import type {
   ExportFormat,
   ExportJob,
   Novel,
+  NovelChapter,
   Screenplay,
   Task,
   Conversation,
@@ -103,6 +106,16 @@ export const api = {
         { method: 'POST', body: JSON.stringify(body ?? {}) },
       )
       return mapAdaptationPlan(data)
+    },
+    chapters: {
+      list: async (novelId: string): Promise<NovelChapter[]> => {
+        const data = await request<ApiChapterRead[]>(`/novels/${novelId}/chapters`)
+        return data.map(mapChapter)
+      },
+      get: async (novelId: string, chapterNum: number): Promise<NovelChapter> => {
+        const data = await request<ApiChapterRead>(`/novels/${novelId}/chapters/${chapterNum}`)
+        return mapChapter(data)
+      },
     },
   },
 

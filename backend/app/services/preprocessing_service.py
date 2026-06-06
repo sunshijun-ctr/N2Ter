@@ -1,9 +1,12 @@
+import asyncio
 import json
 import re
 from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import get_settings
 
 from app.models import (
     Chapter,
@@ -97,19 +100,31 @@ class PreprocessingService:
 
         await db.execute(delete(SceneInNovel).where(SceneInNovel.novel_id == novel.id))
         await db.execute(delete(Character).where(Character.novel_id == novel.id))
+        await db.commit()
 
-        summaries: list[str] = []
         fallback_chapters = 0
         scene_records: list[SceneInNovel] = []
+        total = len(chapters)
 
-        # Stage 2: per-chapter summary + key events + scene segmentation.
-        for index, chapter in enumerate(chapters):
-            summary, summary_quality = await self._chapter_summary(system_prompt, chapter)
+        # Stage 2: per-chapter summary + segmentation. The LLM calls run
+        # concurrently (bounded by a semaphore); DB writes + progress happen
+        # sequentially as each chapter finishes, so the single session stays
+        # safe and progress is still emitted live, one chapter at a time.
+        semaphore = asyncio.Semaphore(max(1, get_settings().preprocess_concurrency))
+
+        async def _chapter_llm(chapter: Chapter):
+            async with semaphore:
+                summary, summary_quality = await self._chapter_summary(system_prompt, chapter)
+                scenes, seg_quality = await self._segment_scenes(system_prompt, chapter)
+                return chapter, summary, summary_quality, scenes, seg_quality
+
+        tasks = [asyncio.create_task(_chapter_llm(chapter)) for chapter in chapters]
+        done_count = 0
+        for finished in asyncio.as_completed(tasks):
+            chapter, summary, summary_quality, scenes, seg_quality = await finished
             chapter.summary = summary
             chapter.summary_quality = summary_quality
             chapter.key_events = self.extract_key_events(chapter.content)
-
-            scenes, seg_quality = await self._segment_scenes(system_prompt, chapter)
             for scene_index, scene in enumerate(scenes, start=1):
                 record = SceneInNovel(
                     novel_id=novel.id,
@@ -131,8 +146,8 @@ class PreprocessingService:
             }
             if summary_quality == QualityLevel.fallback or seg_quality == QualityLevel.fallback:
                 fallback_chapters += 1
-            summaries.append(f"第{chapter.chapter_num}章 {chapter.title}: {summary}")
 
+            done_count += 1
             events.append(
                 await task_service.record_progress(
                     db,
@@ -141,17 +156,26 @@ class PreprocessingService:
                     {
                         "chapter_num": chapter.chapter_num,
                         "scene_count": len(scenes),
-                        "progress": int((index + 1) / max(len(chapters), 1) * 100),
+                        "progress": int(done_count / max(total, 1) * 100),
                     },
                 )
             )
-        await db.flush()
 
-        # Stage 3: novel-level analysis.
-        novel.summary = await self._novel_summary(system_prompt, summaries)
+        summaries = [
+            f"第{chapter.chapter_num}章 {chapter.title}: {chapter.summary}"
+            for chapter in sorted(chapters, key=lambda c: c.chapter_num)
+        ]
+
+        # Stage 3: three independent novel-level analyses run in parallel.
+        novel_summary, character_arcs, foreshadowing = await asyncio.gather(
+            self._novel_summary(system_prompt, summaries),
+            self._character_arcs(system_prompt, summaries),
+            self._foreshadowing(system_prompt, summaries),
+        )
+
+        novel.summary = novel_summary
         events.append(await task_service.record_progress(db, novel.id, "novel_summary_done", {}))
 
-        character_arcs = await self._character_arcs(system_prompt, summaries)
         novel.character_arcs = character_arcs
         for arc in character_arcs:
             db.add(
@@ -169,7 +193,6 @@ class PreprocessingService:
             )
         )
 
-        foreshadowing = await self._foreshadowing(system_prompt, summaries)
         novel.foreshadowing = foreshadowing
         events.append(
             await task_service.record_progress(
