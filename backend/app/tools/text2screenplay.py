@@ -3,7 +3,6 @@ from uuid import UUID
 
 from app.db import get_sessionmaker
 from app.models import Episode
-from app.services.generation_service import generation_service
 from app.tools.base import BaseTool, ToolContext, ToolResult
 
 
@@ -24,10 +23,16 @@ class Text2ScreenplayTool(BaseTool):
 
         async_session = get_sessionmaker()
         async with async_session() as db:
+            from app.services.episode_writing_agent_service import (
+                episode_writing_agent_service,
+            )
+
             episode = await db.get(Episode, UUID(str(episode_id)))
             if not episode:
                 return ToolResult(status="failed", error="Episode not found")
-            generated_episode, task = await generation_service.generate_episode(db, episode)
+            generated_episode, task, _ = await episode_writing_agent_service.generate_episode(
+                db, episode
+            )
 
         return ToolResult(
             status="success",

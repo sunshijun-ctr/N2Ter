@@ -75,6 +75,7 @@ CREATE TYPE episode_status AS ENUM (
 CREATE TYPE task_type AS ENUM (
     'preprocess',
     'generate_episode',
+    'generate_screenplay',
     'generate_overview',
     'export'
 );
@@ -265,12 +266,18 @@ CREATE TABLE screenplays (
     user_id           UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
                           REFERENCES users(id) ON DELETE CASCADE,
     novel_id          UUID NOT NULL REFERENCES novels(id) ON DELETE CASCADE,
+    parent_screenplay_id UUID REFERENCES screenplays(id) ON DELETE SET NULL,
     schema_type       schema_type       NOT NULL,
     schema_version    TEXT              NOT NULL DEFAULT '1.0',
 
     adaptation_plan   JSONB,                               -- 集→章映射方案（强制确认环节）
     -- 跨集风格一致性：用户偏好持久化为剧本级元数据（决策清单）
     style_preferences JSONB             NOT NULL DEFAULT '{}'::jsonb,
+    screenplay_memory JSONB             NOT NULL DEFAULT '{}'::jsonb,
+    branch_name       TEXT,
+    branch_type       TEXT              NOT NULL DEFAULT 'initial',
+    regeneration_instruction TEXT,
+    plan_source       TEXT              NOT NULL DEFAULT 'initial',
 
     status            screenplay_status NOT NULL DEFAULT 'draft',
     is_auto_generated BOOLEAN           NOT NULL DEFAULT FALSE,  -- 概览版自动生成

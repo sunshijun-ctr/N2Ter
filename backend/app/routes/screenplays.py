@@ -24,9 +24,12 @@ from app.schemas import (
     EpisodeUpdate,
     EpisodeVersionRead,
     ScreenplayCreate,
+    ScreenplayGenerateRequest,
+    ScreenplayGenerationRead,
+    ScreenplayRegenerateRequest,
     ScreenplayRead,
 )
-from app.services.generation_service import generation_service
+from app.services.episode_writing_agent_service import episode_writing_agent_service
 from app.services.episode_service import episode_service
 from app.services.planning_service import planning_service
 from app.services.screenplay_service import screenplay_service
@@ -46,9 +49,15 @@ async def create_screenplay(
 
     screenplay = Screenplay(
         novel_id=payload.novel_id,
+        parent_screenplay_id=payload.parent_screenplay_id,
         schema_type=payload.schema_type,
         status=ScreenplayStatus.planning,
         adaptation_plan=adaptation_plan,
+        screenplay_memory={},
+        branch_name=payload.branch_name,
+        branch_type=payload.branch_type,
+        regeneration_instruction=payload.regeneration_instruction,
+        plan_source=payload.plan_source,
         style_preferences={"title": payload.title or f"{novel.title} 改编剧本"},
     )
     db.add(screenplay)
@@ -100,6 +109,55 @@ async def list_episodes(screenplay_id: UUID, db: AsyncSession = Depends(get_db))
         .order_by(Episode.episode_num.asc())
     )
     return list(result.scalars())
+
+
+@router.post(
+    "/screenplays/{screenplay_id}/generate",
+    response_model=ScreenplayGenerationRead,
+)
+async def generate_screenplay(
+    screenplay_id: UUID,
+    payload: ScreenplayGenerateRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    screenplay = await db.get(Screenplay, screenplay_id)
+    if not screenplay:
+        raise HTTPException(status_code=404, detail="Screenplay not found")
+    request = payload or ScreenplayGenerateRequest()
+    return await episode_writing_agent_service.generate_screenplay(
+        db,
+        screenplay,
+        start_episode=request.start_episode,
+        end_episode=request.end_episode,
+        mode=request.mode,
+        stop_on_failure=request.stop_on_failure,
+    )
+
+
+@router.post(
+    "/screenplays/{screenplay_id}/regenerate",
+    response_model=ScreenplayRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def regenerate_screenplay_branch(
+    screenplay_id: UUID,
+    payload: ScreenplayRegenerateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Screenplay:
+    screenplay = await db.get(Screenplay, screenplay_id)
+    if not screenplay:
+        raise HTTPException(status_code=404, detail="Screenplay not found")
+    branch = await screenplay_service.create_branch(
+        db,
+        screenplay,
+        branch_name=payload.branch_name,
+        regeneration_instruction=payload.regeneration_instruction,
+        adaptation_plan=payload.adaptation_plan,
+        plan_source=payload.plan_source,
+    )
+    await db.commit()
+    await db.refresh(branch)
+    return branch
 
 
 @router.post(
@@ -162,7 +220,7 @@ async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db))
         )
 
     try:
-        generated_episode, task = await generation_service.generate_episode(db, episode)
+        generated_episode, task, _ = await episode_writing_agent_service.generate_episode(db, episode)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     return EpisodeTaskRef(

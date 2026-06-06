@@ -119,6 +119,7 @@ export interface Episode extends Timestamped {
   sourceChapters: number[]
   status: EpisodeStatus
   content: EpisodeContent
+  errorMessage?: string
 }
 
 export interface Task extends Timestamped {

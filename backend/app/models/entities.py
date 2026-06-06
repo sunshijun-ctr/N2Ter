@@ -196,10 +196,20 @@ class Screenplay(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), default=DEFAULT_USER_UUID
     )
     novel_id: Mapped[UUID] = mapped_column(ForeignKey("novels.id", ondelete="CASCADE"))
+    parent_screenplay_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("screenplays.id", ondelete="SET NULL")
+    )
     schema_type: Mapped[SchemaType] = mapped_column(pg_enum(SchemaType, "schema_type"))
     schema_version: Mapped[str] = mapped_column(Text, default="1.0")
     adaptation_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     style_preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    screenplay_memory: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    branch_name: Mapped[str | None] = mapped_column(Text)
+    branch_type: Mapped[str] = mapped_column(Text, default="initial")
+    regeneration_instruction: Mapped[str | None] = mapped_column(Text)
+    plan_source: Mapped[str] = mapped_column(Text, default="initial")
     status: Mapped[ScreenplayStatus] = mapped_column(
         pg_enum(ScreenplayStatus, "screenplay_status"), default=ScreenplayStatus.draft
     )
@@ -207,6 +217,7 @@ class Screenplay(Base, TimestampMixin):
     quality: Mapped[QualityLevel | None] = mapped_column(pg_enum(QualityLevel, "quality_level"))
 
     novel: Mapped[Novel] = relationship(back_populates="screenplays")
+    parent_screenplay: Mapped["Screenplay | None"] = relationship(remote_side=[id])
     episodes: Mapped[list["Episode"]] = relationship(back_populates="screenplay")
     conversations: Mapped[list["Conversation"]] = relationship(back_populates="screenplay")
 

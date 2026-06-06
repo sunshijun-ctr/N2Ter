@@ -24,7 +24,7 @@ from app.models import (
     TaskType,
 )
 from app.services.export_service import export_service
-from app.services.generation_service import generation_service
+from app.services.episode_writing_agent_service import episode_writing_agent_service
 from app.services.preprocessing_service import preprocessing_service
 from app.services.task_service import task_service
 from app.workers.celery_app import celery_app
@@ -106,7 +106,9 @@ def generate_episode(episode_id: str, task_id: str | None = None) -> dict:
             db, task_id, TaskType.generate_episode, episode_id=episode.id
         )
         try:
-            generated, task = await generation_service.generate_episode(db, episode, task)
+            generated, task, _ = await episode_writing_agent_service.generate_episode(
+                db, episode, task
+            )
         except Exception as exc:  # noqa: BLE001 - surface failure to the user
             task.status = TaskStatus.failed
             task.error_message = str(exc)

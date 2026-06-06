@@ -112,7 +112,16 @@ export function formatProgressDetail(
     case 'foreshadowing_done':
       return `索引 ${payload.pair_count ?? '?'} 对伏笔`
     case 'vectorize_progress':
-      return `向量化 ${payload.vectorized ?? payload.progress ?? '?'}%`
+      {
+        const progress = payload.progress ?? '?'
+        const count = payload.vectorized_count ?? payload.vectorized
+        const total = payload.total
+        const countText =
+          count != null
+            ? ` · ${count}${total != null ? `/${total}` : ''} 段`
+            : ''
+        return `向量化 ${progress}%${countText}`
+      }
     case 'genre_verified':
       return payload.needs_confirmation ? '题材需二次确认' : '题材校验通过'
     case 'overview_done':

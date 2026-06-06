@@ -6,9 +6,14 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 from app.tools.chapter_get import ChapterGetTool
 from app.tools.chapter_search import ChapterSearchTool
 from app.tools.character_timeline import CharacterTimelineTool
+from app.tools.episode_context import EpisodeContextTool
+from app.tools.episode_get import EpisodeGetTool
 from app.tools.episode_patch import EpisodePatchTool
+from app.tools.episode_rewrite import EpisodeRewriteTool
 from app.tools.foreshadowing_lookup import ForeshadowingLookupTool
 from app.tools.screenplay_validate import ScreenplayValidateTool
+from app.tools.screenplay_memory import ScreenplayMemoryGetTool, ScreenplayMemoryUpdateTool
+from app.tools.screenplay_plan_get import ScreenplayPlanGetTool
 from app.tools.text2screenplay import Text2ScreenplayTool
 
 
@@ -19,8 +24,14 @@ class ToolRegistry:
             ChapterSearchTool(),
             CharacterTimelineTool(),
             ForeshadowingLookupTool(),
+            ScreenplayPlanGetTool(),
+            ScreenplayMemoryGetTool(),
+            ScreenplayMemoryUpdateTool(),
+            EpisodeGetTool(),
+            EpisodeContextTool(),
             Text2ScreenplayTool(),
             EpisodePatchTool(),
+            EpisodeRewriteTool(),
             ScreenplayValidateTool(),
         ]
         self._tools: dict[str, BaseTool] = {tool.name: tool for tool in tools}

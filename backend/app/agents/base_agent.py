@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from app.services.llm_service import llm_service
+from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
 from app.services.skill_loader import skill_loader
 from app.tools.base import ToolContext
@@ -31,7 +31,15 @@ class BaseAgent:
     async def run(self, payload: dict[str, Any], context: ToolContext | None = None) -> dict[str, Any]:
         skill_id = payload.get("skill_id")
         system_prompt = self.build_system_prompt(skill_id)
-        llm_result = await self.llm.generate_json(system_prompt, payload)
+        try:
+            llm_result = await self.llm.generate_json(system_prompt, payload)
+        except LLMError as exc:
+            llm_result = {
+                "status": "stub",
+                "error": str(exc),
+                "prompt_chars": len(system_prompt),
+                "payload_keys": sorted(payload.keys()),
+            }
         return {
             "agent": self.__class__.__name__,
             "payload": payload,

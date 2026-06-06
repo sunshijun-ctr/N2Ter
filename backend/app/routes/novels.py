@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -25,6 +26,7 @@ from app.services.task_service import task_service
 from app.services.vector_store_service import vector_store_service
 
 router = APIRouter(prefix="/novels", tags=["novels"])
+_logger = logging.getLogger(__name__)
 
 
 @router.post("", response_model=NovelRead, status_code=status.HTTP_201_CREATED)
@@ -131,8 +133,8 @@ async def delete_novel(novel_id: UUID, db: AsyncSession = Depends(get_db)) -> No
         raise HTTPException(status_code=500, detail=f"删除项目失败: {exc}") from exc
     try:
         vector_store_service.delete_novel(str(novel_id))
-    except Exception:  # noqa: BLE001 - vector cleanup is best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 - vector cleanup is best-effort
+        _logger.warning("Failed to delete vector collection for novel %s: %s", novel_id, exc)
     if text_path:
         try:
             path = storage_service.resolve(text_path)

@@ -138,6 +138,7 @@ class LLMService:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        json_mode: bool = False,
     ) -> dict[str, Any]:
         """Single tool-calling turn. Returns the assistant message dict
         (``content`` plus any ``tool_calls``)."""
@@ -151,6 +152,10 @@ class LLMService:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        # Only request JSON mode when no tools are offered: providers (incl.
+        # DeepSeek) reject response_format combined with tool calling.
+        if json_mode and not tools:
+            body["response_format"] = {"type": "json_object"}
         url = settings.llm_base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
         try:

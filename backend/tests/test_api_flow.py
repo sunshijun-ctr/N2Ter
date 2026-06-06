@@ -625,11 +625,22 @@ def test_novel_progress_websocket_replays_events() -> None:
 
 @pytest.fixture(autouse=True)
 def clean_database():
+    settings = get_settings()
+    db_name = settings.database_url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if settings.environment != "test" and "test" not in db_name.lower():
+        pytest.skip(
+            "Refusing to truncate a non-test database; set ENVIRONMENT=test or use a test DB."
+        )
     asyncio.run(_clean_database())
     yield
 
 
-def test_delete_novel_cascades_related_data() -> None:
+def test_delete_novel_cascades_related_data_and_vectors(monkeypatch) -> None:
+    from app.routes import novels as novels_route
+
+    deleted_vectors: list[str] = []
+    monkeypatch.setattr(novels_route.vector_store_service, "delete_novel", deleted_vectors.append)
+
     with TestClient(app) as client:
         novel = client.post(
             "/api/novels",
@@ -646,6 +657,7 @@ def test_delete_novel_cascades_related_data() -> None:
 
         assert client.get(f"/api/novels/{novel['id']}").status_code == 404
         assert client.get(f"/api/screenplays/{screenplay['id']}").status_code == 404
+        assert deleted_vectors == [novel["id"]]
 
 
 async def _clean_database() -> None:

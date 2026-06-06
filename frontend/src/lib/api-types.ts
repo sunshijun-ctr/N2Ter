@@ -77,6 +77,7 @@ export interface ApiEpisodeRead extends ApiTimestamped {
   source_chapters: number[]
   status: string
   content?: Record<string, unknown> | null
+  error_message?: string | null
 }
 
 export interface ApiEpisodeUpdate {

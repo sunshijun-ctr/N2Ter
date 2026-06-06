@@ -31,6 +31,7 @@ class EpisodeStatus(str, enum.Enum):
 class TaskType(str, enum.Enum):
     preprocess = "preprocess"
     generate_episode = "generate_episode"
+    generate_screenplay = "generate_screenplay"
     generate_overview = "generate_overview"
     export = "export"
 

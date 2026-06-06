@@ -324,6 +324,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         await api.novels.delete(novelId)
       } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          const serverNovels = await api.novels.list().catch(() => null)
+          clearNovelSession(novelId)
+          if (serverNovels) {
+            if (!serverNovels.length) {
+              set({
+                novels: [],
+                currentNovel: null,
+                currentScreenplay: null,
+                activeEpisodeId: null,
+                selectedSchema: null,
+                planConfirmed: false,
+                adaptationPlan: mockAdaptationPlan,
+                overviewData: null,
+                episodesByScreenplay: {},
+                conversationId: null,
+                chatMessages: [],
+                chatStreaming: null,
+                chatStreamingTools: [],
+                chatSending: false,
+                chatReady: false,
+                preprocessDone: false,
+                globalError: null,
+              })
+              return true
+            }
+            set({ novels: serverNovels, globalError: null })
+            if (!serverNovels.some((n) => n.id === get().currentNovel?.id)) {
+              await get().switchNovel(serverNovels[0].id, { quiet: true })
+            }
+            return true
+          }
+        }
         set({ globalError: formatApiErrorMessage(e, '删除项目失败') })
         return false
       }
@@ -1129,7 +1162,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         patchEpisode(() => ep)
         if (ep.status === 'failed') {
           set({
-            globalError: `第 ${ep.episodeNum} 集生成失败：源章节无效或 AI 输出异常，请检查改编方案后重试`,
+            globalError: ep.errorMessage
+              ? `第 ${ep.episodeNum} 集生成失败：${ep.errorMessage}`
+              : `第 ${ep.episodeNum} 集生成失败，请检查改编方案后重试`,
           })
         }
       }

@@ -326,6 +326,7 @@ export function mapEpisode(dto: ApiEpisodeRead): Episode {
     sourceChapters: dto.source_chapters ?? [],
     status: dto.status as EpisodeStatus,
     content: mapEpisodeContent(dto.content ?? null),
+    errorMessage: dto.error_message ?? undefined,
     ...mapTimestamps(dto),
   }
 }

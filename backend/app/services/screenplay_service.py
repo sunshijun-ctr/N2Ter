@@ -2,7 +2,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Episode, EpisodeStatus, Screenplay
+from app.models import Episode, EpisodeStatus, Screenplay, ScreenplayStatus
 
 _CHAPTER_REF = re.compile(r"第\s*(\d+)\s*章")
 
@@ -56,6 +56,37 @@ class ScreenplayService:
             episodes.append(episode)
         await db.flush()
         return episodes
+
+    async def create_branch(
+        self,
+        db: AsyncSession,
+        source: Screenplay,
+        *,
+        branch_name: str | None,
+        regeneration_instruction: str,
+        adaptation_plan: dict | None = None,
+        plan_source: str = "user_adjusted",
+    ) -> Screenplay:
+        branch_title = branch_name or f"{source.title or '剧本'} 分支"
+        branch = Screenplay(
+            user_id=source.user_id,
+            novel_id=source.novel_id,
+            parent_screenplay_id=source.id,
+            schema_type=source.schema_type,
+            schema_version=source.schema_version,
+            adaptation_plan=adaptation_plan or source.adaptation_plan or {},
+            style_preferences={**(source.style_preferences or {}), "title": branch_title},
+            screenplay_memory={},
+            branch_name=branch_name,
+            branch_type="regenerated",
+            regeneration_instruction=regeneration_instruction,
+            plan_source=plan_source,
+            status=ScreenplayStatus.planning,
+        )
+        db.add(branch)
+        await db.flush()
+        await self.create_episodes_from_plan(db, branch)
+        return branch
 
 
 screenplay_service = ScreenplayService()

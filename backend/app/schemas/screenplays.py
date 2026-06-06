@@ -13,15 +13,26 @@ class ScreenplayCreate(BaseModel):
     schema_type: SchemaType = SchemaType.screenwriter
     title: str | None = None
     adaptation_plan: dict[str, Any] = Field(default_factory=dict)
+    parent_screenplay_id: UUID | None = None
+    branch_name: str | None = None
+    branch_type: str = "initial"
+    regeneration_instruction: str | None = None
+    plan_source: str = "initial"
 
 
 class ScreenplayRead(Timestamped):
     id: UUID
     novel_id: UUID
+    parent_screenplay_id: UUID | None = None
     title: str
     schema_type: SchemaType
     status: ScreenplayStatus
     adaptation_plan: dict[str, Any] = {}
+    screenplay_memory: dict[str, Any] = {}
+    branch_name: str | None = None
+    branch_type: str = "initial"
+    regeneration_instruction: str | None = None
+    plan_source: str = "initial"
 
 
 class AdaptationPlanRequest(BaseModel):
@@ -44,6 +55,7 @@ class EpisodeRead(Timestamped):
     source_chapters: list[int]
     status: EpisodeStatus
     content: dict[str, Any] | None = None
+    error_message: str | None = None
 
 
 class EpisodeUpdate(BaseModel):
@@ -54,6 +66,30 @@ class EpisodeUpdate(BaseModel):
 
 class EpisodePatchRequest(BaseModel):
     instruction: str = Field(min_length=1)
+
+
+class ScreenplayGenerateRequest(BaseModel):
+    start_episode: int = Field(default=1, ge=1)
+    end_episode: int | None = Field(default=None, ge=1)
+    mode: str = "remaining_only"
+    stop_on_failure: bool = True
+
+
+class ScreenplayRegenerateRequest(BaseModel):
+    branch_name: str | None = None
+    regeneration_instruction: str = Field(min_length=1)
+    adaptation_plan: dict[str, Any] | None = None
+    plan_source: str = "user_adjusted"
+
+
+class ScreenplayGenerationRead(BaseModel):
+    status: str
+    screenplay_id: UUID
+    generated_episode_nums: list[int] = Field(default_factory=list)
+    current_episode_num: int | None = None
+    failed_episode_num: int | None = None
+    task_id: UUID | None = None
+    next_action: str = "done"
 
 
 class EpisodeVersionRead(ORMModel):

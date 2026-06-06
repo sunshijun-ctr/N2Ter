@@ -205,12 +205,8 @@ class PreprocessingService:
         )
 
         # Stage 4: vectorisation.
-        vectorized = await self._vectorize(novel, scene_records)
-        events.append(
-            await task_service.record_progress(
-                db, novel.id, "vectorize_progress", {"progress": 100, "vectorized": vectorized}
-            )
-        )
+        vectorized, vector_events = await self._vectorize(db, novel, scene_records)
+        events.extend(vector_events)
 
         # Stage 5: genre verification.
         genre = await self._verify_genre(system_prompt, novel)
@@ -377,32 +373,84 @@ class PreprocessingService:
         except LLMError:
             return None
 
-    async def _vectorize(self, novel: Novel, scenes: list[SceneInNovel]) -> int:
+    async def _vectorize(
+        self, db: AsyncSession, novel: Novel, scenes: list[SceneInNovel]
+    ) -> tuple[int, list[ProgressEvent]]:
+        events: list[ProgressEvent] = []
+        total = len(scenes)
         if not scenes:
-            return 0
-        texts = [scene.content for scene in scenes]
-        try:
-            embeddings = await embedding_service.embed_batch(texts)
-        except Exception as exc:  # noqa: BLE001 - degrade gracefully but surface it
-            _logger.warning("Embedding failed, scenes left unvectorised: %s", exc)
-            return 0
-        ids = [str(scene.id) for scene in scenes]
-        metadatas = [
-            {
-                "chapter_num": None,
-                "scene_index": scene.scene_index,
-                "description": scene.description,
-                "characters": scene.characters,
-            }
-            for scene in scenes
-        ]
-        upserted = vector_store_service.upsert(str(novel.id), ids, embeddings, texts, metadatas)
-        if upserted:
-            for scene in scenes:
-                scene.vector_id = str(scene.id)
-                scene.vectorized = True
-            return len(scenes)
-        return 0
+            events.append(
+                await task_service.record_progress(
+                    db,
+                    novel.id,
+                    "vectorize_progress",
+                    {"progress": 100, "vectorized": 0, "vectorized_count": 0, "total": 0},
+                )
+            )
+            return 0, events
+
+        await db.flush()
+        scene_ids = [scene.id for scene in scenes if scene.id]
+        chapter_nums: dict = {}
+        if scene_ids:
+            rows = await db.execute(
+                select(SceneInNovel.id, Chapter.chapter_num)
+                .join(Chapter, Chapter.id == SceneInNovel.chapter_id)
+                .where(SceneInNovel.id.in_(scene_ids))
+            )
+            chapter_nums = {scene_id: chapter_num for scene_id, chapter_num in rows.all()}
+
+        batch_size = max(1, get_settings().embedding_batch_size)
+        vectorized = 0
+        processed = 0
+        for start in range(0, total, batch_size):
+            batch = scenes[start : start + batch_size]
+            texts = [scene.content for scene in batch]
+            try:
+                embeddings = await embedding_service.embed_batch(texts)
+                if len(embeddings) != len(batch):
+                    raise ValueError(
+                        f"embedding count mismatch: expected {len(batch)}, got {len(embeddings)}"
+                    )
+                ids = [str(scene.id) for scene in batch]
+                metadatas = [
+                    {
+                        "chapter_num": chapter_nums.get(scene.id),
+                        "scene_index": scene.scene_index,
+                        "description": scene.description,
+                        "characters": scene.characters,
+                    }
+                    for scene in batch
+                ]
+                upserted = vector_store_service.upsert(
+                    str(novel.id), ids, embeddings, texts, metadatas
+                )
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully but surface it
+                _logger.warning("Embedding/vector upsert failed for a scene batch: %s", exc)
+                upserted = False
+
+            if upserted:
+                for scene in batch:
+                    scene.vector_id = str(scene.id)
+                    scene.vectorized = True
+                vectorized += len(batch)
+                await db.flush()
+
+            processed += len(batch)
+            events.append(
+                await task_service.record_progress(
+                    db,
+                    novel.id,
+                    "vectorize_progress",
+                    {
+                        "progress": int(processed / max(total, 1) * 100),
+                        "vectorized": vectorized,
+                        "vectorized_count": vectorized,
+                        "total": total,
+                    },
+                )
+            )
+        return vectorized, events
 
     def _task_payload(self, task: str, fields: dict) -> str:
         return json.dumps({"task": task, **fields}, ensure_ascii=False)
