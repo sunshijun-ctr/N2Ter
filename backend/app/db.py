@@ -18,6 +18,15 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
+async def dispose_database() -> None:
+    if get_sessionmaker.cache_info().currsize == 0:
+        return
+    sessionmaker = get_sessionmaker()
+    engine = sessionmaker.kw["bind"]
+    await engine.dispose(close=False)
+    get_sessionmaker.cache_clear()
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     AsyncSessionLocal = get_sessionmaker()
     async with AsyncSessionLocal() as session:

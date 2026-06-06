@@ -27,10 +27,10 @@ class EpisodeRead(Timestamped):
     id: UUID
     screenplay_id: UUID
     episode_num: int
-    title: str
+    title: str | None = None
     source_chapters: list[int]
     status: EpisodeStatus
-    content: dict[str, Any] = {}
+    content: dict[str, Any] | None = None
 
 
 class EpisodeUpdate(BaseModel):

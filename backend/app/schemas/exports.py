@@ -2,17 +2,21 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.models.enums import ExportFormat
-from app.schemas.common import Timestamped
+from datetime import datetime
+
+from app.models.enums import ExportFormat, ExportStatus
+from app.schemas.common import ORMModel
 
 
 class ExportCreate(BaseModel):
     export_format: ExportFormat = ExportFormat.yaml
 
 
-class ExportRead(Timestamped):
+class ExportRead(ORMModel):
     id: UUID
     screenplay_id: UUID
     export_format: ExportFormat
-    status: str
+    status: ExportStatus
     file_url: str | None = None
+    created_at: datetime
+    expires_at: datetime | None = None

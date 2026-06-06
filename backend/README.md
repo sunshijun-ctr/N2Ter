@@ -15,6 +15,8 @@ API health check: `GET /health`
 ## Database
 
 The first migration reuses `../db/ddl.sql`.
+The Docker PostgreSQL service is published on local port `55432` to avoid
+colliding with a locally installed PostgreSQL on `5432`.
 
 ```powershell
 cd backend

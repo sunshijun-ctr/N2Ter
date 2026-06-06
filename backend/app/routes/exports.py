@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import Export, Screenplay
+from app.models import Export, ExportStatus, Screenplay
 from app.schemas import ExportCreate, ExportRead
 
 router = APIRouter(tags=["exports"])
@@ -23,8 +23,8 @@ async def create_export(
         raise HTTPException(status_code=404, detail="Screenplay not found")
     export = Export(
         screenplay_id=screenplay_id,
-        export_format=payload.export_format.value,
-        status="pending",
+        export_format=payload.export_format,
+        status=ExportStatus.pending,
     )
     db.add(export)
     await db.commit()

@@ -30,3 +30,15 @@ class NovelListItem(Timestamped):
     status: NovelStatus
     user_selected_genres: list[str] = []
     word_count: int | None = None
+
+
+class ChapterRead(Timestamped):
+    id: UUID
+    novel_id: UUID
+    chapter_num: int
+    title: str
+    content: str
+    word_count: int
+    summary: str | None = None
+    special_type: str | None = None
+    needs_sub_split: bool = False

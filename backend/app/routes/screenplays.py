@@ -21,10 +21,10 @@ async def create_screenplay(
 
     screenplay = Screenplay(
         novel_id=payload.novel_id,
-        title=payload.title or f"{novel.title} 改编剧本",
-        schema_type=payload.schema_type.value,
-        status=ScreenplayStatus.planning.value,
+        schema_type=payload.schema_type,
+        status=ScreenplayStatus.planning,
         adaptation_plan=payload.adaptation_plan,
+        style_preferences={"title": payload.title or f"{novel.title} 改编剧本"},
     )
     db.add(screenplay)
     await db.commit()
@@ -76,7 +76,7 @@ async def create_episode(screenplay_id: UUID, db: AsyncSession = Depends(get_db)
         episode_num=len(existing) + 1,
         title=f"第 {len(existing) + 1} 集",
         source_chapters=[],
-        status=EpisodeStatus.pending.value,
+        status=EpisodeStatus.pending,
         content={},
     )
     db.add(episode)
@@ -105,7 +105,7 @@ async def update_episode(
     if payload.content is not None:
         episode.content = payload.content
     if payload.status is not None:
-        episode.status = payload.status.value
+        episode.status = payload.status
     await db.commit()
     await db.refresh(episode)
     return episode

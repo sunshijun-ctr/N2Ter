@@ -2,8 +2,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.core import get_settings
+from app.db import get_sessionmaker
 from app.routes import api_router
 from app.routes.websocket import router as websocket_router
 from app.schemas import APIHealth
@@ -35,3 +37,12 @@ app.include_router(websocket_router)
 @app.get("/health", response_model=APIHealth)
 async def health() -> APIHealth:
     return APIHealth(service=settings.app_name)
+
+
+@app.get("/health/db")
+async def database_health() -> dict[str, str]:
+    async_session = get_sessionmaker()
+    async with async_session() as session:
+        database = await session.scalar(text("select current_database()"))
+        version = await session.scalar(text("select version()"))
+    return {"status": "ok", "database": database or "", "version": version or ""}
