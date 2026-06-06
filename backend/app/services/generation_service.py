@@ -13,6 +13,7 @@ from app.models import (
     SceneInNovel,
     Screenplay,
     ScreenplayStatus,
+    SchemaType,
     Task,
     TaskStatus,
     TaskType,
@@ -20,6 +21,7 @@ from app.models import (
 from app.services.episode_service import episode_service
 from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
+from app.services.screenplay_service import _as_chapter_nums
 from app.services.task_service import task_service
 
 _logger = logging.getLogger(__name__)
@@ -45,6 +47,10 @@ class GenerationService:
         if not screenplay:
             raise LookupError("Screenplay not found")
 
+        resolved_chapters = await self._resolve_source_chapters(db, screenplay, episode)
+        if resolved_chapters != (episode.source_chapters or []):
+            episode.source_chapters = resolved_chapters
+
         if task is None:
             task = await task_service.create_task(
                 db,
@@ -65,7 +71,15 @@ class GenerationService:
         )
 
         content: dict | None = None
-        if llm_service.enabled:
+        generation_error: str | None = None
+        llm_error: str | None = None
+
+        if not episode.source_chapters:
+            generation_error = (
+                f"第 {episode.episode_num} 集未分配有效源章节，"
+                "请返回「改编方案」页重新分配集→章映射"
+            )
+        elif llm_service.enabled:
             try:
                 content = await self._build_content_llm(db, screenplay, episode)
             except LLMError as exc:
@@ -75,9 +89,30 @@ class GenerationService:
                     episode.episode_num,
                     exc,
                 )
+                llm_error = str(exc)
                 content = None
-        if content is None:
-            content = await self.build_screenwriter_episode(db, screenplay, episode)
+
+        if content is None and not generation_error:
+            if screenplay.schema_type == SchemaType.ai_video:
+                content = await self.build_ai_video_episode(db, screenplay, episode)
+            else:
+                content = await self.build_screenwriter_episode(db, screenplay, episode)
+
+        if not generation_error and not self._has_usable_content(content, screenplay.schema_type):
+            generation_error = llm_error or (
+                f"第 {episode.episode_num} 集生成结果为空，"
+                "请确认对应章节已完成预处理后再试"
+            )
+
+        if generation_error:
+            episode.status = EpisodeStatus.failed
+            episode.error_message = generation_error
+            task.status = TaskStatus.failed
+            task.error_message = generation_error
+            await db.commit()
+            await db.refresh(episode)
+            await db.refresh(task)
+            return episode, task
 
         episode.content = content
         episode.status = EpisodeStatus.done
@@ -113,6 +148,11 @@ class GenerationService:
             .order_by(Chapter.chapter_num.asc())
         )
         chapters = list(chapters_result.scalars())
+        if not chapters:
+            raise LLMError(
+                f"第 {episode.episode_num} 集对应的源章节 "
+                f"{episode.source_chapters or []} 在数据库中不存在"
+            )
 
         previous_summary = await self._previous_episode_summary(db, screenplay, episode)
         system_prompt = prompt_loader.load("generation_agent")
@@ -134,18 +174,12 @@ class GenerationService:
             "source_text": "\n\n".join(
                 f"【第{ch.chapter_num}章 {ch.title}】\n{ch.content}" for ch in chapters
             )[:24000],
-            "instruction": (
-                f"只生成【第 {episode.episode_num} 集】这一集，输出**单个 JSON 对象**，"
-                "顶层必须直接包含 scenes 数组（本集所有场景）。"
-                "**不要**输出整剧结构：不要 character_list、synopsis、theme_keywords，"
-                "也**不要**把内容包进 episodes 数组里。"
-                "顶层字段：schema_version、schema_type、episode_number、source_chapter、"
-                "title、episode_summary、key_conflict、emotional_arc、scenes。"
-                "scenes 内每个场景的字段遵循 schema_definition 中 scenes 的定义。"
+            "instruction": self._generation_instruction(
+                screenplay.schema_type.value, episode.episode_num
             ),
         }
         user = json.dumps(user_payload, ensure_ascii=False)
-        max_tokens = get_settings().llm_max_tokens
+        max_tokens = self._effective_max_tokens(screenplay.schema_type)
         # Long, rich Chinese JSON occasionally comes back with a syntax slip
         # (e.g. a missing comma) and fails to parse. A low temperature makes the
         # structure far more reliable, and we retry a couple of times before the
@@ -193,7 +227,137 @@ class GenerationService:
         content.setdefault("title", episode.title or f"第 {episode.episode_num} 集")
         if not content.get("scenes"):
             content["scenes"] = []
+        if schema_type == SchemaType.ai_video.value:
+            content = self._normalise_ai_video_scenes(content, episode)
         return content
+
+    @staticmethod
+    def _generation_instruction(schema_type: str, episode_num: int) -> str:
+        if schema_type == "ai_video":
+            return (
+                f"只生成【第 {episode_num} 集】这一集，输出**单个 JSON 对象**。"
+                "顶层必须直接包含 scenes 数组；**不要**包进 episodes 数组。"
+                "顶层字段：schema_version、schema_type、episode_number、source_chapter、"
+                "title、episode_summary、scenes。"
+                "每个 scene 含 location/scene_number 与 shots 分镜数组。"
+                "每个 shot 必填 shot_id、duration_seconds、shot_type、camera_movement、"
+                "subject、subject_action、background、lighting、generation_prompt（英文完整提示词）。"
+                "对白放在 shot.dialogue 数组。不要输出编剧版 slug_line/dialogues 顶层结构。"
+            )
+        return (
+            f"只生成【第 {episode_num} 集】这一集，输出**单个 JSON 对象**，"
+            "顶层必须直接包含 scenes 数组（本集所有场景）。"
+            "**不要**输出整剧结构：不要 character_list、synopsis、theme_keywords，"
+            "也**不要**把内容包进 episodes 数组里。"
+            "顶层字段：schema_version、schema_type、episode_number、source_chapter、"
+            "title、episode_summary、key_conflict、emotional_arc、scenes。"
+            "scenes 内每个场景的字段遵循 schema_definition 中 scenes 的定义。"
+        )
+
+    @staticmethod
+    def _effective_max_tokens(schema_type: SchemaType) -> int:
+        base = get_settings().llm_max_tokens
+        if schema_type == SchemaType.ai_video:
+            return max(base, 8192)
+        return base
+
+    async def _resolve_source_chapters(
+        self, db: AsyncSession, screenplay: Screenplay, episode: Episode
+    ) -> list[int]:
+        raw = list(episode.source_chapters or [])
+        if not raw:
+            for item in (screenplay.adaptation_plan or {}).get("episodes", []):
+                try:
+                    ep_num = int(item.get("episode_num") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if ep_num == episode.episode_num:
+                    raw = _as_chapter_nums(
+                        item.get("source_chapters") or item.get("chapters") or []
+                    )
+                    break
+        if not raw:
+            return []
+        result = await db.execute(
+            select(Chapter.chapter_num).where(
+                Chapter.novel_id == screenplay.novel_id,
+                Chapter.chapter_num.in_(raw),
+            )
+        )
+        existing = set(result.scalars())
+        valid = [num for num in raw if num in existing]
+        if raw and not valid:
+            _logger.warning(
+                "Episode %s requested chapters %s but none exist in DB",
+                episode.episode_num,
+                raw,
+            )
+        return valid
+
+    @staticmethod
+    def _has_usable_content(content: dict | None, schema_type: SchemaType) -> bool:
+        if not content:
+            return False
+        scenes = content.get("scenes") or []
+        if not scenes:
+            return False
+        if schema_type == SchemaType.ai_video:
+            return any(
+                isinstance(scene, dict) and scene.get("shots")
+                for scene in scenes
+            )
+        return True
+
+    def _normalise_ai_video_scenes(self, content: dict, episode: Episode) -> dict:
+        scenes = content.get("scenes") or []
+        normalised: list[dict] = []
+        for scene_index, scene in enumerate(scenes, start=1):
+            if not isinstance(scene, dict):
+                continue
+            shots = scene.get("shots")
+            if not isinstance(shots, list) or not shots:
+                wrapped = self._screenwriter_scene_to_shot(scene, episode, scene_index)
+                scene = {**scene, "shots": [wrapped]}
+            normalised.append(scene)
+        content["scenes"] = normalised
+        return content
+
+    @staticmethod
+    def _screenwriter_scene_to_shot(scene: dict, episode: Episode, scene_index: int) -> dict:
+        action = (
+            scene.get("action_description")
+            or scene.get("action")
+            or scene.get("scene_objective")
+            or "承接原著情节"
+        )
+        slug = scene.get("slug_line") or scene.get("heading") or scene.get("location") or "场景"
+        dialogues = scene.get("dialogues") or scene.get("dialogue") or []
+        return {
+            "shot_id": f"ep{episode.episode_num}_sc{scene_index}_sh1",
+            "duration_seconds": 5,
+            "shot_type": "中景",
+            "camera_movement": "固定",
+            "subject": slug,
+            "subject_action": str(action)[:500],
+            "background": str(slug),
+            "lighting": "自然光",
+            "generation_prompt": (
+                f"Cinematic medium shot, {str(action)[:200]}, natural lighting, film still"
+            ),
+            "dialogue": [
+                {
+                    "character_id": d.get("character") or d.get("character_id") or "",
+                    "line": d.get("line") or d.get("text") or "",
+                    **(
+                        {"voice_tone": d["voice_tone"]}
+                        if d.get("voice_tone")
+                        else {}
+                    ),
+                }
+                for d in dialogues
+                if isinstance(d, dict) and (d.get("line") or d.get("text"))
+            ],
+        }
 
     @staticmethod
     def _episode_from_collection(content: dict, episode_num: int) -> dict | None:
@@ -204,9 +368,6 @@ class GenerationService:
             return None
         for ep in episodes:
             if isinstance(ep, dict) and ep.get("episode_number") == episode_num and ep.get("scenes"):
-                return ep
-        for ep in episodes:
-            if isinstance(ep, dict) and ep.get("scenes"):
                 return ep
         return None
 
@@ -240,7 +401,95 @@ class GenerationService:
             return ""
         return path.read_text(encoding="utf-8")[:8000]
 
-    # ----------------------------------------------------- fallback builder
+    # ----------------------------------------------------- fallback builders
+    async def build_ai_video_episode(
+        self, db: AsyncSession, screenplay: Screenplay, episode: Episode
+    ) -> dict:
+        chapters_result = await db.execute(
+            select(Chapter)
+            .where(
+                Chapter.novel_id == screenplay.novel_id,
+                Chapter.chapter_num.in_(episode.source_chapters or []),
+            )
+            .order_by(Chapter.chapter_num.asc())
+        )
+        chapters = list(chapters_result.scalars())
+        scenes_result = await db.execute(
+            select(SceneInNovel, Chapter.chapter_num)
+            .join(Chapter, Chapter.id == SceneInNovel.chapter_id)
+            .where(
+                SceneInNovel.novel_id == screenplay.novel_id,
+                Chapter.chapter_num.in_(episode.source_chapters or []),
+            )
+            .order_by(Chapter.chapter_num.asc(), SceneInNovel.scene_index.asc())
+        )
+        scene_rows = list(scenes_result)
+        scenes: list[dict] = []
+        if scene_rows:
+            for scene_index, (scene, chapter_num) in enumerate(scene_rows, start=1):
+                subject = scene.characters[0] if scene.characters else "待定"
+                action = scene.description or scene.content or "承接原著情节"
+                scenes.append(
+                    {
+                        "scene_number": scene_index,
+                        "location": f"第{chapter_num}章",
+                        "shots": [
+                            {
+                                "shot_id": f"ep{episode.episode_num}_sc{scene_index}_sh1",
+                                "duration_seconds": 5,
+                                "shot_type": "中景",
+                                "camera_movement": "固定",
+                                "subject": subject,
+                                "subject_action": str(action)[:500],
+                                "background": str(action)[:300],
+                                "lighting": "自然光",
+                                "generation_prompt": (
+                                    "Cinematic medium shot, "
+                                    f"{str(action)[:200]}, natural lighting, film still"
+                                ),
+                                "dialogue": [],
+                            }
+                        ],
+                    }
+                )
+        elif chapters:
+            for scene_index, chapter in enumerate(chapters, start=1):
+                excerpt = (chapter.content or chapter.summary or chapter.title)[:400]
+                scenes.append(
+                    {
+                        "scene_number": scene_index,
+                        "location": f"第{chapter.chapter_num}章 {chapter.title}",
+                        "shots": [
+                            {
+                                "shot_id": f"ep{episode.episode_num}_sc{scene_index}_sh1",
+                                "duration_seconds": 5,
+                                "shot_type": "中景",
+                                "camera_movement": "缓慢推近",
+                                "subject": chapter.title,
+                                "subject_action": excerpt,
+                                "background": chapter.title,
+                                "lighting": "自然光，电影感",
+                                "generation_prompt": (
+                                    "Cinematic medium shot, "
+                                    f"{excerpt[:200]}, natural lighting, shallow depth of field"
+                                ),
+                                "dialogue": [],
+                            }
+                        ],
+                    }
+                )
+        return {
+            "schema_version": "ai-video-1.0",
+            "schema_type": "ai_video",
+            "episode_number": episode.episode_num,
+            "title": episode.title or f"第 {episode.episode_num} 集",
+            "source_chapter": ",".join(str(num) for num in episode.source_chapters or []),
+            "episode_summary": "\n".join(
+                chapter.summary or chapter.title for chapter in chapters
+            ),
+            "scenes": scenes,
+        }
+
     async def build_screenwriter_episode(
         self, db: AsyncSession, screenplay: Screenplay, episode: Episode
     ) -> dict:

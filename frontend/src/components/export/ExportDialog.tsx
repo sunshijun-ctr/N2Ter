@@ -33,6 +33,8 @@ export function ExportDialog() {
 
   if (!exportDialogOpen) return null
 
+  const activeSchema = selectedSchema ?? currentScreenplay?.schemaType
+
   async function handleExport() {
     setSubmitting(true)
     setResult(null)
@@ -71,7 +73,7 @@ export function ExportDialog() {
             <p className="mt-1 text-sm text-muted-foreground">
               {currentNovel ? `《${currentNovel.title}》` : '未选择项目'}
               {currentScreenplay && ` · ${currentScreenplay.title}`}
-              {selectedSchema && ` · ${selectedSchema}`}
+              {activeSchema && ` · ${activeSchema === 'ai_video' ? 'AI 视频版' : activeSchema === 'screenwriter' ? '编剧工作版' : '概览版'}`}
             </p>
           </div>
           <Button variant="ghost" size="icon" onClick={handleClose} aria-label="关闭对话框">

@@ -39,12 +39,16 @@ class ScreenplayService:
                 episode_num = int(item.get("episode_num") or len(episodes) + 1)
             except (TypeError, ValueError):
                 episode_num = len(episodes) + 1
-            source_chapters = item.get("source_chapters") or item.get("chapters") or []
+            source_chapters = _as_chapter_nums(
+                item.get("source_chapters") or item.get("chapters") or []
+            )
+            if not source_chapters:
+                continue
             episode = Episode(
                 screenplay_id=screenplay.id,
                 episode_num=episode_num,
                 title=item.get("title") or f"第 {episode_num} 集",
-                source_chapters=_as_chapter_nums(source_chapters),
+                source_chapters=source_chapters,
                 status=EpisodeStatus.pending,
                 content={},
             )

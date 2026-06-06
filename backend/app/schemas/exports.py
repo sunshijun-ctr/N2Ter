@@ -18,5 +18,6 @@ class ExportRead(ORMModel):
     export_format: ExportFormat
     status: ExportStatus
     file_url: str | None = None
+    error_message: str | None = None
     created_at: datetime
     expires_at: datetime | None = None

@@ -629,6 +629,25 @@ def clean_database():
     yield
 
 
+def test_delete_novel_cascades_related_data() -> None:
+    with TestClient(app) as client:
+        novel = client.post(
+            "/api/novels",
+            json={"title": "待删除小说", "content": "第一章 测试。", "genres": ["都市情感"]},
+        ).json()
+        client.post(f"/api/novels/{novel['id']}/preprocess")
+        screenplay = client.post(
+            "/api/screenplays",
+            json={"novel_id": novel["id"], "schema_type": "ai_video", "title": "待删剧本"},
+        ).json()
+
+        delete_response = client.delete(f"/api/novels/{novel['id']}")
+        assert delete_response.status_code == 204, delete_response.text
+
+        assert client.get(f"/api/novels/{novel['id']}").status_code == 404
+        assert client.get(f"/api/screenplays/{screenplay['id']}").status_code == 404
+
+
 async def _clean_database() -> None:
     dsn = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://")
     conn = await asyncpg.connect(dsn)

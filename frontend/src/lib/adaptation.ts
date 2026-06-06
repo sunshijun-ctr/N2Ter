@@ -11,11 +11,16 @@ export function buildAdaptationPlan(
   let chapter = 1
 
   for (let ep = 1; ep <= clamped; ep++) {
+    if (chapter > totalChapters) break
+
     const remainingEpisodes = clamped - ep + 1
     const remainingChapters = totalChapters - chapter + 1
     const count = Math.max(1, Math.ceil(remainingChapters / remainingEpisodes))
-    const sourceChapters = Array.from({ length: count }, (_, i) => chapter + i)
-    chapter += count
+    const sourceChapters = Array.from({ length: count }, (_, i) => chapter + i).filter(
+      (n) => n <= totalChapters,
+    )
+    if (!sourceChapters.length) break
+    chapter += sourceChapters.length
 
     const range =
       sourceChapters.length === 1
@@ -33,7 +38,7 @@ export function buildAdaptationPlan(
   const ratio = (totalChapters / clamped).toFixed(1)
   return {
     totalChapters,
-    episodeCount: clamped,
+    episodeCount: items.length,
     items,
     reasoning: `全书 ${totalChapters} 章，建议拆为 ${clamped} 集（约 ${ratio} 章/集），兼顾节奏与戏剧张力。`,
   }

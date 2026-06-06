@@ -171,6 +171,39 @@ def test_normalise_content_fills_required_keys() -> None:
     assert content["scenes"]
 
 
+def test_normalise_ai_video_wraps_screenwriter_scenes() -> None:
+    screenplay = _FakeScreenplay()
+    screenplay.schema_type = SchemaType.ai_video
+    episode = _FakeEpisode()
+    content = generation_service._normalise_content(
+        {
+            "scenes": [
+                {
+                    "slug_line": "内景 - 咖啡馆",
+                    "action_description": "林晚独自坐着。",
+                    "dialogues": [{"character": "林晚", "line": "有人吗？"}],
+                }
+            ]
+        },
+        screenplay,
+        episode,
+    )
+    assert content["schema_type"] == "ai_video"
+    shots = content["scenes"][0]["shots"]
+    assert len(shots) == 1
+    assert shots[0]["generation_prompt"]
+    assert shots[0]["dialogue"][0]["line"] == "有人吗？"
+
+
+def test_has_usable_content_ai_video_requires_shots() -> None:
+    assert generation_service._has_usable_content(
+        {"scenes": [{"slug_line": "x"}]}, SchemaType.ai_video
+    ) is False
+    assert generation_service._has_usable_content(
+        {"scenes": [{"shots": [{"shot_id": "s1"}]}]}, SchemaType.ai_video
+    ) is True
+
+
 def test_schema_definition_loads_known_type() -> None:
     text = generation_service._schema_definition("screenwriter")
     assert "schema_type" in text
@@ -332,6 +365,55 @@ def test_pdf_render_html_screenwriter() -> None:
     assert "内景 - 咖啡馆 - 日" in html
     assert "这位置有人吗？" in html
     assert "沈云洲" in html
+
+
+def test_pdf_render_html_ai_video_nested_shots() -> None:
+    from app.exporters.pdf_exporter import pdf_exporter
+
+    payload = {
+        "schema_type": "ai_video",
+        "schema_version": "ai-video-1.0",
+        "title": "AI 视频测试",
+        "episodes": [
+            {
+                "episode_number": 1,
+                "content": {
+                    "episode_number": 1,
+                    "title": "初遇",
+                    "scenes": [
+                        {
+                            "location": "内景 · 咖啡馆",
+                            "shots": [
+                                {
+                                    "shot_id": "ep1_sc1_sh1",
+                                    "shot_type": "中景",
+                                    "camera_movement": "推近",
+                                    "subject": "林晚",
+                                    "subject_action": "低头搅拌咖啡",
+                                    "lighting": "侧逆光，暖色调",
+                                    "generation_prompt": "A medium shot of a woman stirring coffee",
+                                    "dialogue": [
+                                        {
+                                            "character_id": "林晚",
+                                            "line": "这位置有人。",
+                                            "voice_tone": "平静",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    html = pdf_exporter.render_html(payload)
+    assert "AI 视频测试" in html
+    assert "内景 · 咖啡馆" in html
+    assert "推近" in html
+    assert "generation_prompt" not in html  # label is 生成提示, not raw key
+    assert "A medium shot of a woman stirring coffee" in html
+    assert "这位置有人。" in html
 
 
 def test_pdf_render_html_overview_escapes() -> None:

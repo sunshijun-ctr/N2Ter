@@ -1,7 +1,7 @@
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import get_settings
@@ -22,6 +22,7 @@ from app.services.overview_service import overview_service
 from app.services.preprocessing_service import preprocessing_service
 from app.services.storage_service import storage_service
 from app.services.task_service import task_service
+from app.services.vector_store_service import vector_store_service
 
 router = APIRouter(prefix="/novels", tags=["novels"])
 
@@ -120,8 +121,25 @@ async def delete_novel(novel_id: UUID, db: AsyncSession = Depends(get_db)) -> No
     novel = await db.get(Novel, novel_id)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
-    await db.delete(novel)
-    await db.commit()
+    text_path = novel.original_text_url
+    try:
+        # ORM ``session.delete`` can fail on NOT NULL FKs; rely on DB CASCADE instead.
+        await db.execute(delete(Novel).where(Novel.id == novel_id))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除项目失败: {exc}") from exc
+    try:
+        vector_store_service.delete_novel(str(novel_id))
+    except Exception:  # noqa: BLE001 - vector cleanup is best-effort
+        pass
+    if text_path:
+        try:
+            path = storage_service.resolve(text_path)
+            if path.is_file():
+                path.unlink()
+        except Exception:  # noqa: BLE001 - file cleanup is best-effort
+            pass
 
 
 @router.post("/{novel_id}/preprocess", response_model=TaskRef, status_code=status.HTTP_202_ACCEPTED)

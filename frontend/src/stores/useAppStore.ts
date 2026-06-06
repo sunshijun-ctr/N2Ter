@@ -14,6 +14,8 @@ import type {
   SceneDialogue,
   SchemaType,
   Screenplay,
+  Shot,
+  ShotDialogue,
   ToolCall,
   WsServerMessage,
 } from '@/lib/types'
@@ -21,10 +23,19 @@ import {
   mockAdaptationPlan,
   mockEpisodesByScreenplay,
   mockNovels,
+  mockScreenplays,
   getScreenplayForNovel,
   getOverviewScreenplay,
 } from '@/lib/mock'
 import { buildAdaptationPlan } from '@/lib/adaptation'
+import { newCanvasId } from '@/lib/utils'
+import {
+  clearNovelSession,
+  getLastNovelId,
+  loadNovelSession,
+  saveNovelSession,
+  setLastNovelId,
+} from '@/lib/novel-session'
 import {
   applyProgressEvent,
   formatProgressDetail,
@@ -32,7 +43,7 @@ import {
   type StageUiState,
 } from '@/lib/preprocess-stages'
 import {
-  pickScreenplay,
+  resolveScreenplay,
   enrichEpisodesFromPlan,
   mapOverviewDocument,
   buildOverviewFallback,
@@ -89,12 +100,13 @@ interface AppState {
   hydrateFromApi: () => Promise<void>
   uploadAndPreprocess: (file: File, genres: string[]) => Promise<string | null>
   refreshNovel: (novelId: string) => Promise<void>
+  deleteNovel: (novelId: string) => Promise<boolean>
   startPreprocessWs: () => void
   stopPreprocessWs: () => void
   applyPreprocessProgressEvent: (eventType: string, payload: Record<string, unknown>) => void
 
   setCurrentNovel: (n: Novel | null) => void
-  switchNovel: (novelId: string) => Promise<void>
+  switchNovel: (novelId: string, options?: { quiet?: boolean }) => Promise<void>
   setSelectedSchema: (s: SchemaType | null) => void
   setAdaptationPlan: (p: AdaptationPlan | null) => void
   confirmPlan: () => Promise<void>
@@ -118,6 +130,28 @@ interface AppState {
   removeScene: (episodeId: string, sceneId: string) => void
   addDialogue: (episodeId: string, sceneId: string) => void
   removeDialogue: (episodeId: string, sceneId: string, dialogueId: string) => void
+  updateShot: (
+    episodeId: string,
+    sceneId: string,
+    shotId: string,
+    patch: Partial<Shot>,
+  ) => void
+  addShot: (episodeId: string, sceneId: string) => void
+  removeShot: (episodeId: string, sceneId: string, shotId: string) => void
+  updateShotDialogue: (
+    episodeId: string,
+    sceneId: string,
+    shotId: string,
+    dialogueId: string,
+    patch: Partial<ShotDialogue>,
+  ) => void
+  addShotDialogue: (episodeId: string, sceneId: string, shotId: string) => void
+  removeShotDialogue: (
+    episodeId: string,
+    sceneId: string,
+    shotId: string,
+    dialogueId: string,
+  ) => void
   saveActiveEpisode: () => Promise<void>
   generateEpisode: (episodeId: string) => Promise<void>
   generateAllEpisodes: () => Promise<void>
@@ -133,6 +167,20 @@ interface AppState {
   clearError: () => void
   setExportDialogOpen: (open: boolean) => void
   requestExport: (format: ExportFormat) => Promise<ExportResult>
+}
+
+function formatApiErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(e.message) as { detail?: unknown }
+      if (typeof parsed.detail === 'string') return parsed.detail
+      if (Array.isArray(parsed.detail)) return parsed.detail.map(String).join('；')
+    } catch {
+      /* plain text */
+    }
+    return e.message || fallback
+  }
+  return fallback
 }
 
 function patchEpisodes(
@@ -158,7 +206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   episodesByScreenplay: cloneEpisodes(mockEpisodesByScreenplay),
   activeEpisodeId: initialEpisodes[0]?.id ?? null,
 
-  selectedSchema: 'screenwriter',
+  selectedSchema: null,
   adaptationPlan: initialScreenplay?.adaptationPlan ?? mockAdaptationPlan,
   planConfirmed: false,
 
@@ -197,7 +245,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       }
       const currentId = get().currentNovel?.id
-      const validId = novels.some((n) => n.id === currentId) ? currentId! : novels[0].id
+      const lastId = getLastNovelId()
+      const validId = [currentId, lastId, novels[0].id].find(
+        (id) => id && novels.some((n) => n.id === id),
+      )!
       await get().switchNovel(validId)
     } catch {
       set({ apiConnected: false })
@@ -249,6 +300,56 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ globalError: e instanceof ApiError ? e.message : '刷新小说状态失败' })
     }
+  },
+
+  deleteNovel: async (novelId) => {
+    if (!get().novels.some((n) => n.id === novelId)) return false
+
+    if (get().apiConnected) {
+      try {
+        await api.novels.delete(novelId)
+      } catch (e) {
+        set({ globalError: formatApiErrorMessage(e, '删除项目失败') })
+        return false
+      }
+    }
+
+    clearNovelSession(novelId)
+    const remaining = get().novels.filter((n) => n.id !== novelId)
+    const wasCurrent = get().currentNovel?.id === novelId
+
+    if (wasCurrent) {
+      get().stopPreprocessWs()
+      get().disconnectChat()
+    }
+
+    if (!remaining.length) {
+      set({
+        novels: [],
+        currentNovel: null,
+        currentScreenplay: null,
+        activeEpisodeId: null,
+        selectedSchema: null,
+        planConfirmed: false,
+        adaptationPlan: mockAdaptationPlan,
+        overviewData: null,
+        episodesByScreenplay: {},
+        conversationId: null,
+        chatMessages: [],
+        chatStreaming: null,
+        chatStreamingTools: [],
+        chatSending: false,
+        chatReady: false,
+        preprocessDone: false,
+      })
+      return true
+    }
+
+    set({ novels: remaining })
+    if (wasCurrent) {
+      await get().switchNovel(remaining[0].id, { quiet: true })
+    }
+    return true
   },
 
   startPreprocessWs: () => {
@@ -303,11 +404,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setCurrentNovel: (n) => set({ currentNovel: n }),
 
-  switchNovel: async (novelId) => {
+  switchNovel: async (novelId, options) => {
+    const quiet = options?.quiet ?? false
     get().stopPreprocessWs()
     get().disconnectChat()
     set({
-      globalLoading: true,
+      ...(quiet ? {} : { globalLoading: true }),
       globalError: null,
       conversationId: null,
       chatMessages: [],
@@ -319,8 +421,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       if (get().apiConnected) {
         const novel = await api.novels.get(novelId)
+        const session = loadNovelSession(novelId)
         const screenplays = await api.screenplays.listByNovel(novelId)
-        const screenplay = pickScreenplay(screenplays, get().selectedSchema) ?? null
+        const screenplay = resolveScreenplay(screenplays, session, session?.selectedSchema) ?? null
         let episodes: Episode[] = []
         if (screenplay) {
           episodes = await api.episodes.list(screenplay.id)
@@ -338,16 +441,31 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         }
         episodes = enrichEpisodesFromPlan(episodes, plan)
+        const activeEpisodeId =
+          session?.activeEpisodeId && episodes.some((e) => e.id === session.activeEpisodeId)
+            ? session.activeEpisodeId
+            : episodes[0]?.id ?? null
+        const restoredSchema = screenplay?.schemaType ?? session?.selectedSchema ?? null
+        const planConfirmed = session?.planConfirmed ?? Boolean(screenplay)
         set((state) => ({
           currentNovel: novel,
           currentScreenplay: screenplay,
-          activeEpisodeId: episodes[0]?.id ?? null,
+          selectedSchema: restoredSchema,
+          planConfirmed,
+          activeEpisodeId,
           adaptationPlan: plan,
           episodesByScreenplay: screenplay
             ? { ...state.episodesByScreenplay, [screenplay.id]: episodes }
             : state.episodesByScreenplay,
           globalLoading: false,
         }))
+        saveNovelSession(novelId, {
+          selectedSchema: restoredSchema,
+          screenplayId: screenplay?.id ?? null,
+          activeEpisodeId,
+          planConfirmed,
+        })
+        setLastNovelId(novelId)
         return
       }
 
@@ -357,23 +475,46 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       }
       await new Promise((r) => setTimeout(r, 300))
-      const screenplay = getScreenplayForNovel(novelId) ?? null
+      const session = loadNovelSession(novelId)
+      const novelScreenplays = mockScreenplays.filter((s) => s.novelId === novelId)
+      const screenplay =
+        resolveScreenplay(novelScreenplays, session, session?.selectedSchema) ??
+        getScreenplayForNovel(novelId) ??
+        null
       const episodes = screenplay ? get().episodesByScreenplay[screenplay.id] ?? [] : []
+      const activeEpisodeId =
+        session?.activeEpisodeId && episodes.some((e) => e.id === session.activeEpisodeId)
+          ? session.activeEpisodeId
+          : episodes[0]?.id ?? null
+      const restoredSchema = screenplay?.schemaType ?? session?.selectedSchema ?? null
       const chapters = novel.wordCount ? Math.ceil(novel.wordCount / 9000) : 80
       set({
         currentNovel: novel,
         currentScreenplay: screenplay,
-        activeEpisodeId: episodes[0]?.id ?? null,
+        selectedSchema: restoredSchema,
+        planConfirmed: session?.planConfirmed ?? Boolean(screenplay),
+        activeEpisodeId,
         adaptationPlan: buildAdaptationPlan(chapters, Math.min(36, chapters), novel.title),
         globalLoading: false,
       })
+      saveNovelSession(novelId, {
+        selectedSchema: restoredSchema,
+        screenplayId: screenplay?.id ?? null,
+        activeEpisodeId,
+        planConfirmed: session?.planConfirmed ?? Boolean(screenplay),
+      })
+      setLastNovelId(novelId)
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '加载项目失败'
       set({ globalError: msg, globalLoading: false })
     }
   },
 
-  setSelectedSchema: (s) => set({ selectedSchema: s }),
+  setSelectedSchema: (s) => {
+    set({ selectedSchema: s })
+    const novel = get().currentNovel
+    if (novel) saveNovelSession(novel.id, { selectedSchema: s })
+  },
   setAdaptationPlan: (p) => set({ adaptationPlan: p, planConfirmed: false }),
   confirmPlan: async () => {
     const { currentNovel, selectedSchema, adaptationPlan, apiConnected } = get()
@@ -392,12 +533,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentNovel.id,
         currentNovel.title,
       )
-      const screenplay = await api.screenplays.create({
-        novelId: currentNovel.id,
-        schemaType: selectedSchema,
-        title: `${currentNovel.title} · 剧本`,
-        adaptationPlan: payload,
-      })
+      const existingScreenplays = await api.screenplays.listByNovel(currentNovel.id)
+      const existing = existingScreenplays.find(
+        (s) => s.schemaType === selectedSchema && !s.isAutoGenerated,
+      )
+      const screenplay =
+        existing ??
+        (await api.screenplays.create({
+          novelId: currentNovel.id,
+          schemaType: selectedSchema,
+          title: `${currentNovel.title} · 剧本`,
+          adaptationPlan: payload,
+        }))
       const planResolved = screenplay.adaptationPlan ?? adaptationPlan
       const episodes = enrichEpisodesFromPlan(
         await api.episodes.list(screenplay.id),
@@ -414,6 +561,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeEpisodeId: episodes[0]?.id ?? null,
         globalLoading: false,
       }))
+      saveNovelSession(currentNovel.id, {
+        selectedSchema,
+        screenplayId: screenplay.id,
+        activeEpisodeId: episodes[0]?.id ?? null,
+        planConfirmed: true,
+      })
+      setLastNovelId(currentNovel.id)
     } catch (e) {
       set({
         globalError: e instanceof ApiError ? e.message : '创建剧本失败',
@@ -422,14 +576,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw e
     }
   },
-  resetPlanFlow: () =>
+  resetPlanFlow: () => {
+    const novel = get().currentNovel
+    if (novel) clearNovelSession(novel.id)
     set({
       selectedSchema: null,
-      adaptationPlan: get().currentNovel
-        ? buildAdaptationPlan(80, 36, get().currentNovel!.title)
+      adaptationPlan: novel
+        ? buildAdaptationPlan(80, 36, novel.title)
         : mockAdaptationPlan,
       planConfirmed: false,
-    }),
+    })
+  },
 
   fetchAdaptationPlan: async (chaptersPerEpisode = 2) => {
     const novel = get().currentNovel
@@ -494,7 +651,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  setActiveEpisode: (id) => set({ activeEpisodeId: id }),
+  setActiveEpisode: (id) => {
+    set({ activeEpisodeId: id })
+    const novel = get().currentNovel
+    if (novel) saveNovelSession(novel.id, { activeEpisodeId: id })
+  },
 
   getActiveEpisode: () => {
     const { activeEpisodeId, currentScreenplay, episodesByScreenplay } = get()
@@ -564,12 +725,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const screenplayId = state.currentScreenplay?.id
       if (!screenplayId) return state
-      const newScene: Scene = {
-        id: `scene_${Date.now().toString(36)}`,
-        heading: '',
-        action: '',
-        dialogues: [],
-      }
+      const schema =
+        state.currentScreenplay?.schemaType ?? state.selectedSchema ?? 'screenwriter'
+      const isAiVideo = schema === 'ai_video'
+      const newScene: Scene = isAiVideo
+        ? {
+            id: newCanvasId('scene'),
+            heading: '',
+            action: '',
+            dialogues: [],
+            shots: [
+              {
+                id: newCanvasId('shot'),
+                dialogues: [],
+                emotions: [],
+              },
+            ],
+            raw: {},
+          }
+        : {
+            id: newCanvasId('scene'),
+            heading: '',
+            action: '',
+            dialogues: [],
+          }
       return {
         ...state,
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
@@ -637,6 +816,168 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  updateShot: (episodeId, sceneId, shotId, patch) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id !== sceneId
+                ? s
+                : {
+                    ...s,
+                    shots: (s.shots ?? []).map((sh) =>
+                      sh.id === shotId ? { ...sh, ...patch } : sh,
+                    ),
+                  },
+            ),
+          },
+        })),
+      }
+    })
+  },
+
+  addShot: (episodeId, sceneId) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      const newShot: Shot = {
+        id: newCanvasId('shot'),
+        dialogues: [],
+        emotions: [],
+      }
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id === sceneId ? { ...s, shots: [...(s.shots ?? []), newShot] } : s,
+            ),
+          },
+        })),
+      }
+    })
+  },
+
+  removeShot: (episodeId, sceneId, shotId) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id === sceneId
+                ? { ...s, shots: (s.shots ?? []).filter((sh) => sh.id !== shotId) }
+                : s,
+            ),
+          },
+        })),
+      }
+    })
+  },
+
+  updateShotDialogue: (episodeId, sceneId, shotId, dialogueId, patch) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id !== sceneId
+                ? s
+                : {
+                    ...s,
+                    shots: (s.shots ?? []).map((sh) =>
+                      sh.id !== shotId
+                        ? sh
+                        : {
+                            ...sh,
+                            dialogues: sh.dialogues.map((d) =>
+                              d.id === dialogueId ? { ...d, ...patch } : d,
+                            ),
+                          },
+                    ),
+                  },
+            ),
+          },
+        })),
+      }
+    })
+  },
+
+  addShotDialogue: (episodeId, sceneId, shotId) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      const newDialogue: ShotDialogue = {
+        id: newCanvasId('shotdlg'),
+        character: '',
+        line: '',
+      }
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id !== sceneId
+                ? s
+                : {
+                    ...s,
+                    shots: (s.shots ?? []).map((sh) =>
+                      sh.id === shotId
+                        ? { ...sh, dialogues: [...sh.dialogues, newDialogue] }
+                        : sh,
+                    ),
+                  },
+            ),
+          },
+        })),
+      }
+    })
+  },
+
+  removeShotDialogue: (episodeId, sceneId, shotId, dialogueId) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({
+          ...ep,
+          content: {
+            scenes: (ep.content.scenes ?? []).map((s) =>
+              s.id !== sceneId
+                ? s
+                : {
+                    ...s,
+                    shots: (s.shots ?? []).map((sh) =>
+                      sh.id === shotId
+                        ? {
+                            ...sh,
+                            dialogues: sh.dialogues.filter((d) => d.id !== dialogueId),
+                          }
+                        : sh,
+                    ),
+                  },
+            ),
+          },
+        })),
+      }
+    })
+  },
+
   saveActiveEpisode: async () => {
     const episode = get().getActiveEpisode()
     if (!episode || !get().apiConnected) return
@@ -653,6 +994,17 @@ export const useAppStore = create<AppState>((set, get) => ({
             ),
           },
         }))
+      }
+      const novel = get().currentNovel
+      const screenplay = get().currentScreenplay
+      if (novel && screenplay) {
+        saveNovelSession(novel.id, {
+          screenplayId: screenplay.id,
+          selectedSchema: screenplay.schemaType,
+          activeEpisodeId: episode.id,
+          planConfirmed: true,
+        })
+        setLastNovelId(novel.id)
       }
     } catch (e) {
       set({ globalError: e instanceof ApiError ? e.message : '保存集内容失败' })
@@ -697,6 +1049,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (finalEpisode) {
         const ep = finalEpisode
         patchEpisode(() => ep)
+        if (ep.status === 'failed') {
+          set({
+            globalError: `第 ${ep.episodeNum} 集生成失败：源章节无效或 AI 输出异常，请检查改编方案后重试`,
+          })
+        }
       }
     } catch (e) {
       patchEpisode((ep) => ({ ...ep, status: 'failed' }))
@@ -743,15 +1100,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (apiConnected) {
       try {
+        await get().saveActiveEpisode()
         let job = await api.exports.create(currentScreenplay.id, format)
         if (job.status === 'pending' || job.status === 'running') {
           job = await api.exports.waitUntilReady(job.id)
         }
         if (job.status === 'failed') {
-          return { ok: false, message: `${label} 导出失败，请稍后重试` }
+          return {
+            ok: false,
+            message: job.errorMessage ?? `${label} 导出失败，请稍后重试`,
+          }
         }
         if (job.status !== 'done') {
-          return { ok: false, message: `${label} 导出超时，请稍后在任务中心重试` }
+          return {
+            ok: false,
+            message: `${label} 导出超时：任务仍在排队，请确认 Celery worker 已启动后重试`,
+          }
         }
         return {
           ok: true,

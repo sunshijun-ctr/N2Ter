@@ -30,6 +30,7 @@ import type {
   OverviewEpisodeSummary,
   Scene,
   SceneDialogue,
+  Shot,
   SchemaType,
   Screenplay,
   ScreenplayStatus,
@@ -190,13 +191,81 @@ export function buildOverviewFallback(
   }
 }
 
+function mapShot(raw: Record<string, unknown>, index: number): Shot {
+  const dialoguesRaw = (raw.dialogue ?? raw.dialogues ?? []) as Record<string, unknown>[]
+  const emotionsRaw = (raw.character_emotion ?? []) as Record<string, unknown>[]
+  return {
+    id: String(raw.shot_id ?? raw.id ?? `shot-${index}`),
+    shotType: raw.shot_type ? String(raw.shot_type) : undefined,
+    durationSeconds:
+      typeof raw.duration_seconds === 'number' ? raw.duration_seconds : undefined,
+    subject: raw.subject ? String(raw.subject) : undefined,
+    subjectAction: raw.subject_action ? String(raw.subject_action) : undefined,
+    cameraAngle: raw.camera_angle ? String(raw.camera_angle) : undefined,
+    cameraMovement: raw.camera_movement ? String(raw.camera_movement) : undefined,
+    lighting: raw.lighting ? String(raw.lighting) : undefined,
+    background: raw.background ? String(raw.background) : undefined,
+    generationPrompt: raw.generation_prompt ? String(raw.generation_prompt) : undefined,
+    transition: raw.transition_to_next ? String(raw.transition_to_next) : undefined,
+    dialogues: (Array.isArray(dialoguesRaw) ? dialoguesRaw : [])
+      .map((d, i) => ({
+        id: String(d.id ?? `shotdlg-${index}-${i}`),
+        character: d.character_id
+          ? String(d.character_id)
+          : d.character
+            ? String(d.character)
+            : undefined,
+        line: String(d.line ?? d.text ?? ''),
+        voiceTone: d.voice_tone ? String(d.voice_tone) : undefined,
+      }))
+      .filter((d) => d.line),
+    emotions: (Array.isArray(emotionsRaw) ? emotionsRaw : [])
+      .map((e) => String(e.emotion ?? ''))
+      .filter(Boolean),
+    raw,
+  }
+}
+
+/** 把（已编辑的）分镜回写为后端 JSON，合并原始 raw 中未编辑的字段。 */
+function shotToJson(shot: Shot): Record<string, unknown> {
+  const base: Record<string, unknown> = { ...(shot.raw ?? {}) }
+  base.shot_id = shot.id
+  if (shot.shotType !== undefined) base.shot_type = shot.shotType
+  if (shot.durationSeconds !== undefined) base.duration_seconds = shot.durationSeconds
+  if (shot.subject !== undefined) base.subject = shot.subject
+  if (shot.subjectAction !== undefined) base.subject_action = shot.subjectAction
+  if (shot.cameraAngle !== undefined) base.camera_angle = shot.cameraAngle
+  if (shot.cameraMovement !== undefined) base.camera_movement = shot.cameraMovement
+  if (shot.lighting !== undefined) base.lighting = shot.lighting
+  if (shot.background !== undefined) base.background = shot.background
+  if (shot.generationPrompt !== undefined) base.generation_prompt = shot.generationPrompt
+  if (shot.transition !== undefined) base.transition_to_next = shot.transition
+  const rawDlg = (Array.isArray(base.dialogue) ? base.dialogue : []) as Record<string, unknown>[]
+  base.dialogue = shot.dialogues.map((d, i) => ({
+    ...(rawDlg[i] ?? {}),
+    line: d.line,
+    ...(d.character !== undefined ? { character_id: d.character } : {}),
+    ...(d.voiceTone !== undefined ? { voice_tone: d.voiceTone } : {}),
+  }))
+  delete base.dialogues
+  const rawEmo = (Array.isArray(base.character_emotion)
+    ? base.character_emotion
+    : []) as Record<string, unknown>[]
+  base.character_emotion = shot.emotions.map((e, i) => ({ ...(rawEmo[i] ?? {}), emotion: e }))
+  return base
+}
+
 function mapScene(raw: Record<string, unknown>, index: number): Scene {
   const dialoguesRaw = (raw.dialogues as Record<string, unknown>[]) ?? []
+  const shotsRaw = (raw.shots as Record<string, unknown>[]) ?? []
+  const hasShots = Array.isArray(shotsRaw) && shotsRaw.length > 0
   return {
-    id: String(raw.id ?? `scene-${index}`),
+    id: String(raw.id ?? raw.scene_id ?? `scene-${index}`),
     heading: String(raw.heading ?? raw.slug_line ?? ''),
     action: String(raw.action ?? raw.action_description ?? ''),
     dialogues: dialoguesRaw.map((d, i) => mapDialogue(d, i)),
+    // AI 视频版：场景内是分镜。映射出来用于展示，并保留原始 JSON 以便无损回写。
+    ...(hasShots ? { shots: shotsRaw.map((s, i) => mapShot(s, i)), raw } : {}),
   }
 }
 
@@ -225,20 +294,26 @@ export function toEpisodeContentPayload(
 ): Record<string, unknown> {
   return {
     ...(existing ?? {}),
-    scenes: (content.scenes ?? []).map((s, i) => ({
-      id: s.id,
-      scene_number: i + 1,
-      heading: s.heading,
-      slug_line: s.heading,
-      action: s.action,
-      action_description: s.action,
-      dialogues: s.dialogues.map((d) => ({
-        id: d.id,
-        character: d.character,
-        line: d.line,
-        parenthetical: d.parenthetical,
-      })),
-    })),
+    scenes: (content.scenes ?? []).map((s, i) => {
+      // AI 视频版（分镜场景）：把编辑后的分镜合并回原始 JSON，保留未编辑字段。
+      if (s.shots) {
+        return { ...(s.raw ?? {}), id: s.id, shots: s.shots.map(shotToJson) }
+      }
+      return {
+        id: s.id,
+        scene_number: i + 1,
+        heading: s.heading,
+        slug_line: s.heading,
+        action: s.action,
+        action_description: s.action,
+        dialogues: s.dialogues.map((d) => ({
+          id: d.id,
+          character: d.character,
+          line: d.line,
+          parenthetical: d.parenthetical,
+        })),
+      }
+    }),
   }
 }
 
@@ -292,6 +367,7 @@ export function mapExport(dto: ApiExportRead): ExportJob {
     exportFormat: dto.export_format as ExportFormat,
     status: dto.status as ExportStatus,
     fileUrl: dto.file_url ?? undefined,
+    errorMessage: dto.error_message ?? undefined,
     createdAt: dto.created_at,
     expiresAt: dto.expires_at ?? undefined,
   }
@@ -373,16 +449,32 @@ export function pickScreenplay(
   preferredSchema?: SchemaType | null,
 ): Screenplay | undefined {
   if (!screenplays.length) return undefined
-  if (preferredSchema && preferredSchema !== 'overview') {
-    return (
-      screenplays.find((s) => s.schemaType === preferredSchema) ??
-      screenplays.find((s) => s.schemaType === 'screenwriter') ??
-      screenplays[0]
-    )
+  if (preferredSchema === 'overview') {
+    return screenplays.find((s) => s.schemaType === 'overview') ?? screenplays[0]
+  }
+  if (preferredSchema) {
+    const match = screenplays.find((s) => s.schemaType === preferredSchema)
+    if (match) return match
+    // 已明确选择某详细版类型时，不要悄悄回退到另一种（避免 AI 视频版刷新变编剧版）
+    return undefined
   }
   return (
     screenplays.find((s) => s.schemaType === 'screenwriter') ??
+    screenplays.find((s) => s.schemaType === 'ai_video') ??
     screenplays.find((s) => !s.isAutoGenerated) ??
     screenplays[0]
   )
+}
+
+export function resolveScreenplay(
+  screenplays: Screenplay[],
+  session: { screenplayId?: string | null; selectedSchema?: SchemaType | null } | null,
+  fallbackSchema?: SchemaType | null,
+): Screenplay | undefined {
+  if (session?.screenplayId) {
+    const byId = screenplays.find((s) => s.id === session.screenplayId)
+    if (byId) return byId
+  }
+  const schema = session?.selectedSchema ?? fallbackSchema
+  return pickScreenplay(screenplays, schema)
 }

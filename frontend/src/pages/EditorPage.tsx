@@ -16,6 +16,7 @@ const schemaLabels = {
 export function EditorPage() {
   const {
     currentNovel,
+    currentScreenplay,
     selectedSchema,
     setExportDialogOpen,
     planConfirmed,
@@ -51,13 +52,17 @@ export function EditorPage() {
     setSaving(false)
   }
 
+  const activeSchema = selectedSchema ?? currentScreenplay?.schemaType
+
   return (
     <>
       <PageHeader
         title="剧本工作区"
         description={
           currentNovel
-            ? `《${currentNovel.title}》· ${selectedSchema ? schemaLabels[selectedSchema] : '未选类型'}${planConfirmed ? ' · 方案已确认' : ''}`
+            ? `《${currentNovel.title}》· ${
+                activeSchema ? schemaLabels[activeSchema] : '未选类型'
+              }${planConfirmed ? ' · 方案已确认' : ''}`
             : '画布编辑 + 对话修改'
         }
         actions={

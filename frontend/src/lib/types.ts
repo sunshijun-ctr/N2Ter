@@ -68,11 +68,41 @@ export interface SceneDialogue {
   parenthetical?: string
 }
 
+export interface ShotDialogue {
+  id: string
+  character?: string
+  line: string
+  voiceTone?: string
+}
+
+/** AI 视频版的分镜（shot） */
+export interface Shot {
+  id: string
+  shotType?: string
+  durationSeconds?: number
+  subject?: string
+  subjectAction?: string
+  cameraAngle?: string
+  cameraMovement?: string
+  lighting?: string
+  background?: string
+  generationPrompt?: string
+  transition?: string
+  dialogues: ShotDialogue[]
+  emotions: string[]
+  /** 原始分镜 JSON，保留未编辑字段（negative_prompt / sound_effects 等）以无损回写 */
+  raw?: Record<string, unknown>
+}
+
 export interface Scene {
   id: string
   heading: string
   action: string
   dialogues: SceneDialogue[]
+  /** AI 视频版：分镜列表（编剧版为空） */
+  shots?: Shot[]
+  /** 原始场景 JSON，用于无损回写（保留 shots 等非编剧版字段） */
+  raw?: Record<string, unknown>
 }
 
 export interface EpisodeContent {
@@ -146,6 +176,7 @@ export interface ExportJob extends Timestamped {
   exportFormat: ExportFormat
   status: ExportStatus
   fileUrl?: string
+  errorMessage?: string
   expiresAt?: string
 }
 

@@ -117,6 +117,7 @@ export interface ApiExportRead {
   export_format: string
   status: string
   file_url?: string | null
+  error_message?: string | null
   created_at: string
   expires_at?: string | null
 }

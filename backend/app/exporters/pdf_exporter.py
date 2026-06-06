@@ -202,22 +202,59 @@ class PDFExporter:
             num = escape(str(content.get("episode_number", episode.get("episode_number", ""))))
             ep_title = escape(str(content.get("title") or episode.get("title") or ""))
             parts.append(f"<div class='episode'><h2>第 {num} 集 · {ep_title}</h2>")
-            shots = content.get("shots") or content.get("scenes") or []
-            for index, shot in enumerate(shots, start=1):
-                parts.append("<div class='scene'>")
-                parts.append(f"<div class='slug'>镜头 {index}</div>")
-                for label, key in (
-                    ("运镜", "camera_movement"),
-                    ("光线", "lighting"),
-                    ("画面", "description"),
-                    ("生成提示", "generation_prompt"),
-                ):
-                    if shot.get(key):
-                        parts.append(
-                            f"<div class='kv'><b>{label}</b>{escape(str(shot[key]))}</div>"
-                        )
-                parts.append("</div>")
+            top_shots = content.get("shots")
+            if isinstance(top_shots, list) and top_shots:
+                for index, shot in enumerate(top_shots, start=1):
+                    parts.append(self._render_ai_video_shot(shot, index))
+            else:
+                for scene in content.get("scenes") or []:
+                    scene_label = (
+                        scene.get("location")
+                        or scene.get("slug_line")
+                        or scene.get("heading")
+                    )
+                    if scene_label:
+                        parts.append(f"<h3>{escape(str(scene_label))}</h3>")
+                    for index, shot in enumerate(scene.get("shots") or [], start=1):
+                        parts.append(self._render_ai_video_shot(shot, index))
             parts.append("</div>")
+        return "".join(parts)
+
+    def _render_ai_video_shot(self, shot: dict, index: int) -> str:
+        parts = ["<div class='scene'>"]
+        shot_id = shot.get("shot_id") or shot.get("id")
+        label = f"镜头 {index}"
+        if shot_id:
+            label = f"{label} · {shot_id}"
+        parts.append(f"<div class='slug'>{escape(str(label))}</div>")
+        for label, key in (
+            ("景别", "shot_type"),
+            ("角度", "camera_angle"),
+            ("运镜", "camera_movement"),
+            ("时长", "duration_seconds"),
+            ("主体", "subject"),
+            ("动作", "subject_action"),
+            ("背景", "background"),
+            ("光线", "lighting"),
+            ("生成提示", "generation_prompt"),
+        ):
+            value = shot.get(key)
+            if value not in (None, ""):
+                parts.append(f"<div class='kv'><b>{label}</b>{escape(str(value))}</div>")
+        for dialogue in shot.get("dialogue") or shot.get("dialogues") or []:
+            who = dialogue.get("character_id") or dialogue.get("character") or ""
+            line = dialogue.get("line") or dialogue.get("text") or ""
+            if not line:
+                continue
+            tone = dialogue.get("voice_tone")
+            tone_html = (
+                f" <span class='paren'>（{escape(str(tone))}）</span>" if tone else ""
+            )
+            parts.append(
+                f"<div class='dialogue'><span class='who'>{escape(str(who))}</span>"
+                f"{tone_html}：{escape(str(line))}</div>"
+            )
+        parts.append("</div>")
         return "".join(parts)
 
 
