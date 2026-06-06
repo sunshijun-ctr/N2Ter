@@ -6,7 +6,20 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 
 class ChapterSearchTool(BaseTool):
     name = "chapter_search"
-    description = "用向量检索查找相关原文片段。"
+    description = "用向量检索查找相关原文片段（取证：诗词、特定描写、细节）。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "自然语言检索词"},
+            "top_k": {"type": "integer", "description": "返回片段数，默认 5"},
+            "chapter_range": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "可选，限定章节范围 [起, 止]",
+            },
+        },
+        "required": ["query"],
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         if not context.novel_id:

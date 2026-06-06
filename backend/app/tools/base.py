@@ -20,6 +20,8 @@ class ToolResult(BaseModel):
 class BaseTool(ABC):
     name: str
     description: str
+    # JSON schema for the tool arguments (OpenAI function-calling format).
+    parameters: dict[str, Any] = {"type": "object", "properties": {}}
 
     @abstractmethod
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:

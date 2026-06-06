@@ -36,7 +36,8 @@ export interface Novel extends Timestamped {
   title: string
   author?: string
   status: NovelStatus
-  genres: string[]
+  /** 对应后端 user_selected_genres；上传请求体字段仍为 genres */
+  userSelectedGenres: string[]
   wordCount?: number
   summary?: string
 }
@@ -134,6 +135,7 @@ export interface ExportJob extends Timestamped {
   exportFormat: ExportFormat
   status: ExportStatus
   fileUrl?: string
+  expiresAt?: string
 }
 
 export interface AdaptationPlanItem {
@@ -166,14 +168,19 @@ export type WsClientMessage =
   | { type: 'stop' }
 
 export type WsServerMessage =
-  | { type: 'message_start' }
+  | { type: 'message_start'; conversation_id?: string }
   | { type: 'content_delta'; text: string }
-  | { type: 'tool_call'; name: string; args?: string }
-  | { type: 'tool_result'; name: string; status: string; data?: unknown }
+  | { type: 'message_saved'; message_id: string }
   | { type: 'message_end' }
+  | { type: 'tool_call'; name: string; args?: string; tool?: string }
+  | { type: 'tool_result'; name: string; status: string; data?: unknown }
   | { type: 'episode_generated'; episode: Episode }
   | { type: 'task_progress'; progress: number; stage?: string; message?: string }
   | { type: 'error'; error: string }
+
+export type NovelProgressWsMessage =
+  | { type: 'progress'; id: number; event_type: string; payload: Record<string, unknown> }
+  | { type: 'done' }
 
 export type PreprocessProgressEvent =
   | { type: 'split_completed'; chapter_count: number }

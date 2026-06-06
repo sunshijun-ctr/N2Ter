@@ -9,7 +9,15 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 
 class EpisodePatchTool(BaseTool):
     name = "episode_patch"
-    description = "根据用户指令修改整集剧本。"
+    description = "根据用户指令修改整集剧本（修改的最小粒度=整集）。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "episode_id": {"type": "string", "description": "目标集 id；缺省时用上下文当前集"},
+            "instruction": {"type": "string", "description": "修改指令"},
+        },
+        "required": ["instruction"],
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         episode_id = args.get("episode_id") or context.episode_id

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { UploadCloud } from 'lucide-react'
+import { Loader2, UploadCloud } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,8 +10,11 @@ import { useAppStore } from '@/stores/useAppStore'
 
 export function UploadPage() {
   const navigate = useNavigate()
-  const { currentNovel } = useAppStore()
-  const [selected, setSelected] = useState<string[]>(currentNovel?.genres ?? [])
+  const fileRef = useRef<HTMLInputElement>(null)
+  const { currentNovel, apiConnected, uploadAndPreprocess, globalLoading } = useAppStore()
+  const [selected, setSelected] = useState<string[]>(currentNovel?.userSelectedGenres ?? [])
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   function toggleGenre(g: string) {
     setSelected((prev) =>
@@ -23,14 +26,36 @@ export function UploadPage() {
     )
   }
 
+  function onFileChange(f: File | null) {
+    if (!f) return
+    if (!/\.(txt|docx)$/i.test(f.name)) {
+      useAppStore.getState().setGlobalError('仅支持 .txt / .docx 文件（当前仅 .txt 可解析）')
+      return
+    }
+    setFile(f)
+  }
+
+  async function handleStartPreprocess() {
+    if (!file || selected.length === 0) return
+    setUploading(true)
+    try {
+      const novelId = await uploadAndPreprocess(file, selected)
+      if (novelId) navigate('/preprocess')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const busy = uploading || globalLoading
+
   return (
     <>
       <PageHeader
         title="上传小说"
         description={
-          currentNovel
-            ? `当前项目：${currentNovel.title} · 支持最大 100 万字`
-            : '支持最大 100 万字 · 上传时强制选择题材（1-3 个）'
+          apiConnected
+            ? '上传后将调用 POST /api/novels 并自动启动预处理'
+            : '需启动后端（侧边栏 Mock 模式）才能上传；或仅浏览 mock 流程'
         }
       />
       <div className="flex-1 overflow-auto p-6">
@@ -40,13 +65,33 @@ export function UploadPage() {
               <CardTitle>1. 选择小说文件</CardTitle>
             </CardHeader>
             <CardContent>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".txt,.docx"
+                className="hidden"
+                onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
+              />
               <button
                 type="button"
-                className="flex w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-12 text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  onFileChange(e.dataTransfer.files[0] ?? null)
+                }}
+                className="flex w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-12 text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
               >
                 <UploadCloud className="h-8 w-8" />
-                <span className="text-sm">点击或拖拽 .txt / .docx 文件到这里</span>
-                <span className="text-xs">（接入 POST /api/novels 后启用）</span>
+                <span className="text-sm">
+                  {file ? file.name : '点击或拖拽 .txt 文件到这里'}
+                </span>
+                {file && (
+                  <span className="text-xs text-primary">
+                    {(file.size / 1024).toFixed(1)} KB · 就绪
+                  </span>
+                )}
               </button>
             </CardContent>
           </Card>
@@ -85,13 +130,25 @@ export function UploadPage() {
           </Card>
 
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => navigate('/preprocess')}>
-              查看预处理
-            </Button>
-            <Button size="lg" disabled={selected.length === 0} onClick={() => navigate('/preprocess')}>
-              开始预处理
+            {currentNovel && (
+              <Button variant="outline" onClick={() => navigate('/preprocess')}>
+                查看预处理
+              </Button>
+            )}
+            <Button
+              size="lg"
+              disabled={!file || selected.length === 0 || busy || !apiConnected}
+              onClick={() => void handleStartPreprocess()}
+            >
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              上传并开始预处理
             </Button>
           </div>
+          {!apiConnected && (
+            <p className="text-center text-xs text-muted-foreground">
+              启动 backend 后刷新页面，侧边栏显示 API 即可上传
+            </p>
+          )}
         </div>
       </div>
     </>

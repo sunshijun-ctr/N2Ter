@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(E:/miniconda3/envs/N2Ter/python.exe -c \"import app.main, app.services.conversation_service; print\\('imports OK'\\)\")",
+      "Bash(E:/miniconda3/envs/N2Ter/python.exe -c \"import app.main, app.workers.tasks, app.services.export_service; print\\('imports OK'\\)\")"
+    ]
+  }
+}

@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg>=0.29.0",
     "celery>=5.4.0",
     "fastapi>=0.111.0",
+    "httpx>=0.27.0",
     "pydantic-settings>=2.3.4",
     "python-multipart>=0.0.9",
     "PyYAML>=6.0.2",
@@ -18,10 +19,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27.0",
     "pytest>=8.2.2",
     "pytest-asyncio>=0.23.7",
     "ruff>=0.5.0",
+]
+# Vector retrieval. Optional: the service degrades to SQL search without it.
+vector = [
+    "chromadb>=0.5.0",
+]
+# PDF export. On Windows/conda also install the GTK native libs:
+#   conda install -c conda-forge pango
+pdf = [
+    "weasyprint>=60",
 ]
 
 [build-system]

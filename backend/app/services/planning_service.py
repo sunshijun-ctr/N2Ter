@@ -1,4 +1,3 @@
-from math import ceil
 from uuid import UUID
 
 from sqlalchemy import select

@@ -6,7 +6,19 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 
 class CharacterTimelineTool(BaseTool):
     name = "character_timeline"
-    description = "查询角色弧光和章节内变化。"
+    description = "查询角色弧光和章节内变化，保证人物前后一致。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "character_name": {"type": "string", "description": "角色名"},
+            "chapter_range": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "可选，限定章节范围 [起, 止]",
+            },
+        },
+        "required": ["character_name"],
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         if not context.novel_id:

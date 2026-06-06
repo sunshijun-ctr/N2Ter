@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { NovelSwitcher } from './NovelSwitcher'
+import { useAppStore } from '@/stores/useAppStore'
 
 const STORAGE_KEY = 'n2ter-sidebar-collapsed'
 
@@ -27,6 +28,7 @@ const navItems = [
 ]
 
 export function Sidebar() {
+  const apiConnected = useAppStore((s) => s.apiConnected)
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(STORAGE_KEY) === '1'
@@ -114,7 +116,24 @@ export function Sidebar() {
             <PanelLeft className="h-4 w-4" />
           </Button>
         ) : (
-          <p className="text-xs text-muted-foreground">AI 小说转剧本 · v0.2</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">AI 小说转剧本 · v0.2</p>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 text-[10px]',
+                apiConnected ? 'text-primary' : 'text-muted-foreground',
+              )}
+              title={apiConnected ? '已连接后端 API' : '离线 mock 模式'}
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  apiConnected ? 'bg-primary' : 'bg-muted-foreground/50',
+                )}
+              />
+              {apiConnected ? 'API' : 'Mock'}
+            </span>
+          </div>
         )}
       </div>
     </aside>

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.models import Task, TaskStatus
+from app.models import Task
 from app.schemas import TaskRead
 from app.services.task_service import task_service
 

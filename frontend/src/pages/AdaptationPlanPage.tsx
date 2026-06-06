@@ -19,11 +19,14 @@ export function AdaptationPlanPage() {
     adaptationPlan,
     setAdaptationPlan,
     confirmPlan,
+    fetchAdaptationPlan,
+    apiConnected,
   } = useAppStore()
 
   const totalChapters = adaptationPlan?.totalChapters ?? 80
   const [episodeCount, setEpisodeCount] = useState(adaptationPlan?.episodeCount ?? 36)
   const [regenerating, setRegenerating] = useState(false)
+  const [confirming, setConfirming] = useState(false)
 
   const plan = adaptationPlan
   const schemaLabel =
@@ -47,17 +50,28 @@ export function AdaptationPlanPage() {
 
   async function handleRegenerate() {
     setRegenerating(true)
-    // 模拟 planning_agent 重新分配（后端接入后替换为 API）
-    await new Promise((r) => setTimeout(r, 800))
-    setAdaptationPlan(
-      buildAdaptationPlan(totalChapters, episodeCount, currentNovel?.title ?? ''),
-    )
+    const chaptersPerEpisode = Math.max(1, Math.ceil(totalChapters / episodeCount))
+    if (apiConnected) {
+      await fetchAdaptationPlan(chaptersPerEpisode)
+    } else {
+      await new Promise((r) => setTimeout(r, 800))
+      setAdaptationPlan(
+        buildAdaptationPlan(totalChapters, episodeCount, currentNovel?.title ?? ''),
+      )
+    }
     setRegenerating(false)
   }
 
-  function handleConfirm() {
-    confirmPlan()
-    navigate('/editor')
+  async function handleConfirm() {
+    setConfirming(true)
+    try {
+      await confirmPlan()
+      navigate('/editor')
+    } catch {
+      /* error shown in global banner */
+    } finally {
+      setConfirming(false)
+    }
   }
 
   if (!selectedSchema || selectedSchema === 'overview') {
@@ -195,8 +209,8 @@ export function AdaptationPlanPage() {
             <Button variant="outline" onClick={() => navigate('/schema-select')}>
               上一步
             </Button>
-            <Button size="lg" onClick={handleConfirm}>
-              确认方案，进入工作区
+            <Button size="lg" disabled={confirming} onClick={() => void handleConfirm()}>
+              {confirming ? '创建剧本中…' : '确认方案，进入工作区'}
             </Button>
           </div>
         </div>

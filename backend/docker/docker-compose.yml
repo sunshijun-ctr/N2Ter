@@ -1,31 +1,52 @@
+# Run from this directory:  docker compose up --build
+# Copy .env.example -> .env and fill in LLM keys to enable real AI features.
+# Build context is the repo root so the image can include both backend/ and the
+# db/ddl.sql replayed by the initial Alembic migration.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://n2ter:n2ter@postgres:5432/n2ter
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  CHROMA_HOST: chroma
+  CHROMA_PORT: "8000"
+  ASYNC_TASKS_ENABLED: "${ASYNC_TASKS_ENABLED:-true}"
+  # LLM (OpenAI-compatible). Empty key -> deterministic fallback mode.
+  LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+  LLM_API_KEY: "${LLM_API_KEY:-}"
+  LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+  EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-}"
+  EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+  EMBEDDING_MODEL: "${EMBEDDING_MODEL:-bge-m3}"
+  RERANK_URL: "${RERANK_URL:-}"
+  RERANK_API_KEY: "${RERANK_API_KEY:-}"
+
 services:
   api:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.api
+      context: ../..
+      dockerfile: backend/docker/Dockerfile.api
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://n2ter:n2ter@postgres:5432/n2ter
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    environment: *app-env
+    volumes:
+      - app_storage:/app/backend/storage
     depends_on:
       - postgres
       - redis
+      - chroma
 
   worker:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.worker
-    environment:
-      DATABASE_URL: postgresql+asyncpg://n2ter:n2ter@postgres:5432/n2ter
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      context: ../..
+      dockerfile: backend/docker/Dockerfile.worker
+    environment: *app-env
+    volumes:
+      - app_storage:/app/backend/storage
     depends_on:
       - postgres
       - redis
+      - chroma
 
   postgres:
     image: postgres:16
@@ -47,6 +68,10 @@ services:
     image: chromadb/chroma:latest
     ports:
       - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
 
 volumes:
   postgres_data:
+  chroma_data:
+  app_storage:

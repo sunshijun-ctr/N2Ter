@@ -39,7 +39,11 @@ class TaskService:
     ) -> ProgressEvent:
         event = ProgressEvent(novel_id=novel_id, event_type=event_type, payload=payload or {})
         db.add(event)
-        await db.flush()
+        # Commit so progress (and any pending work persisted alongside it, e.g.
+        # per-chapter results) is immediately visible to pollers / the progress
+        # WebSocket during long async runs — not buffered until the very end.
+        # Safe because the session uses expire_on_commit=False.
+        await db.commit()
         return event
 
     async def list_progress_events(self, db: AsyncSession, novel_id: UUID) -> list[ProgressEvent]:
@@ -47,6 +51,16 @@ class TaskService:
             select(ProgressEvent)
             .where(ProgressEvent.novel_id == novel_id)
             .order_by(ProgressEvent.created_at.asc(), ProgressEvent.id.asc())
+        )
+        return list(result.scalars())
+
+    async def list_progress_events_after(
+        self, db: AsyncSession, novel_id: UUID, after_id: int
+    ) -> list[ProgressEvent]:
+        result = await db.execute(
+            select(ProgressEvent)
+            .where(ProgressEvent.novel_id == novel_id, ProgressEvent.id > after_id)
+            .order_by(ProgressEvent.id.asc())
         )
         return list(result.scalars())
 

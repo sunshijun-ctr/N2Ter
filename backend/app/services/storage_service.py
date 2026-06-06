@@ -18,6 +18,12 @@ class LocalStorageService:
         target.write_text(content, encoding="utf-8")
         return str(target.relative_to(self.storage_dir))
 
+    def write_bytes(self, relative_path: str | Path, content: bytes) -> str:
+        target = self.storage_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        return str(target.relative_to(self.storage_dir))
+
     def resolve(self, relative_path: str | Path) -> Path:
         path = (self.storage_dir / relative_path).resolve()
         if not path.is_relative_to(self.storage_dir.resolve()):

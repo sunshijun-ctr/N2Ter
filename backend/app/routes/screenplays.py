@@ -4,8 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import get_settings
 from app.db import get_db
-from app.models import Episode, EpisodeStatus, Novel, Screenplay, ScreenplayStatus
+from app.models import (
+    Episode,
+    EpisodeStatus,
+    Novel,
+    Screenplay,
+    ScreenplayStatus,
+    TaskStatus,
+    TaskType,
+)
 from app.schemas import (
     AdaptationPlanRead,
     AdaptationPlanRequest,
@@ -21,6 +30,7 @@ from app.services.generation_service import generation_service
 from app.services.episode_service import episode_service
 from app.services.planning_service import planning_service
 from app.services.screenplay_service import screenplay_service
+from app.services.task_service import task_service
 
 router = APIRouter(tags=["screenplays"])
 
@@ -130,8 +140,29 @@ async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db))
     episode = await db.get(Episode, episode_id)
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
+
+    if get_settings().async_tasks_enabled:
+        task = await task_service.create_task(
+            db,
+            task_type=TaskType.generate_episode,
+            episode_id=episode.id,
+            status=TaskStatus.pending,
+        )
+        episode.status = EpisodeStatus.generating
+        await db.commit()
+        await db.refresh(task)
+        from app.workers.tasks import generate_episode as generate_episode_task
+
+        async_result = generate_episode_task.delay(str(episode_id), str(task.id))
+        task.celery_id = async_result.id
+        await db.commit()
+        await db.refresh(task)
+        return EpisodeTaskRef(
+            task_id=task.id, status=task.status.value, episode_id=episode.id
+        )
+
     try:
-        generated_episode, task = await generation_service.generate_episode_fallback(db, episode)
+        generated_episode, task = await generation_service.generate_episode(db, episode)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     return EpisodeTaskRef(

@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { Save } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { EpisodeList } from '@/components/editor/EpisodeList'
@@ -12,7 +14,21 @@ const schemaLabels = {
 } as const
 
 export function EditorPage() {
-  const { currentNovel, selectedSchema, setExportDialogOpen, planConfirmed } = useAppStore()
+  const {
+    currentNovel,
+    selectedSchema,
+    setExportDialogOpen,
+    planConfirmed,
+    apiConnected,
+    saveActiveEpisode,
+  } = useAppStore()
+  const [saving, setSaving] = useState(false)
+
+  async function handleSave() {
+    setSaving(true)
+    await saveActiveEpisode()
+    setSaving(false)
+  }
 
   return (
     <>
@@ -25,6 +41,12 @@ export function EditorPage() {
         }
         actions={
           <div className="flex gap-2">
+            {apiConnected && (
+              <Button variant="outline" size="sm" disabled={saving} onClick={() => void handleSave()}>
+                <Save className="h-3.5 w-3.5" />
+                {saving ? '保存中…' : '保存本集'}
+              </Button>
+            )}
             <Button variant="outline" size="sm">
               批量生成剩余集
             </Button>

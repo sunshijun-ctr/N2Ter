@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import get_settings
 from app.db import get_db
-from app.models import Export, Screenplay
+from app.models import Export, ExportStatus, Screenplay
 from app.schemas import ExportCreate, ExportRead
 from app.services.export_service import export_service
 from app.services.storage_service import storage_service
@@ -24,6 +25,18 @@ async def create_export(
     screenplay = await db.get(Screenplay, screenplay_id)
     if not screenplay:
         raise HTTPException(status_code=404, detail="Screenplay not found")
+
+    if get_settings().async_tasks_enabled:
+        export = await export_service.create_export_record(
+            db, screenplay, payload.export_format, ExportStatus.pending
+        )
+        await db.commit()
+        await db.refresh(export)
+        from app.workers.tasks import export_screenplay
+
+        export_screenplay.delay(str(export.id))
+        return export
+
     return await export_service.create_export(db, screenplay, payload.export_format)
 
 
@@ -46,4 +59,10 @@ async def download_export(export_id: UUID, db: AsyncSession = Depends(get_db)) -
     path = storage_service.resolve(export.file_url)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Export file missing")
-    return FileResponse(path, filename=path.name, media_type="application/x-yaml")
+    media_types = {
+        ".yaml": "application/x-yaml",
+        ".pdf": "application/pdf",
+        ".zip": "application/zip",
+    }
+    media_type = media_types.get(path.suffix, "application/octet-stream")
+    return FileResponse(path, filename=path.name, media_type=media_type)

@@ -6,7 +6,14 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 
 class ForeshadowingLookupTool(BaseTool):
     name = "foreshadowing_lookup"
-    description = "查询指定章节附近的伏笔和呼应。"
+    description = "查询指定章节附近的伏笔埋设与呼应。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "chapter_num": {"type": "integer", "description": "章节号"},
+        },
+        "required": ["chapter_num"],
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         if not context.novel_id:

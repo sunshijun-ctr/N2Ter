@@ -10,6 +10,12 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 class Text2ScreenplayTool(BaseTool):
     name = "text2screenplay"
     description = "基于章节上下文生成单集剧本。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "episode_id": {"type": "string", "description": "目标集 id；缺省时用上下文当前集"},
+        },
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         episode_id = args.get("episode_id") or context.episode_id
@@ -21,7 +27,7 @@ class Text2ScreenplayTool(BaseTool):
             episode = await db.get(Episode, UUID(str(episode_id)))
             if not episode:
                 return ToolResult(status="failed", error="Episode not found")
-            generated_episode, task = await generation_service.generate_episode_fallback(db, episode)
+            generated_episode, task = await generation_service.generate_episode(db, episode)
 
         return ToolResult(
             status="success",

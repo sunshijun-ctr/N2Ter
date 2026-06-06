@@ -1,8 +1,23 @@
 FROM python:3.11-slim
 
-WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
-COPY app ./app
+# Native libraries for WeasyPrint (PDF export runs in the worker) + CJK fonts.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libharfbuzz0b \
+        libfontconfig1 \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
+
+COPY backend/pyproject.toml ./backend/pyproject.toml
+RUN pip install --no-cache-dir "./backend[pdf,vector]"
+
+COPY backend ./backend
+COPY db ./db
+COPY prompts ./prompts
+COPY Schema ./Schema
+
+WORKDIR /app/backend
 CMD ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]

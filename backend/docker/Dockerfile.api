@@ -1,8 +1,27 @@
 FROM python:3.11-slim
 
-WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
-COPY app ./app
+# Native libraries for WeasyPrint (PDF export) + CJK fonts for Chinese glyphs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libharfbuzz0b \
+        libfontconfig1 \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+WORKDIR /app
+
+# Install dependencies first (cached layer): only pyproject is needed.
+COPY backend/pyproject.toml ./backend/pyproject.toml
+RUN pip install --no-cache-dir "./backend[pdf,vector]"
+
+# App code + the DDL the initial Alembic migration replays (repo-root/db)
+# + the prompt templates and Schema definitions loaded at runtime.
+COPY backend ./backend
+COPY db ./db
+COPY prompts ./prompts
+COPY Schema ./Schema
+
+WORKDIR /app/backend
+# Apply migrations, then serve. PYTHONPATH=cwd resolves the `app` package.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

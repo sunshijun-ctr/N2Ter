@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
@@ -7,7 +8,11 @@ import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/stores/useAppStore'
 
 export function AppLayout() {
-  const { globalLoading, globalError, clearError } = useAppStore()
+  const { globalLoading, globalError, clearError, hydrateFromApi } = useAppStore()
+
+  useEffect(() => {
+    void hydrateFromApi()
+  }, [hydrateFromApi])
 
   return (
     <div className="relative flex h-dvh w-full overflow-hidden bg-background">

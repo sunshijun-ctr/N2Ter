@@ -7,6 +7,18 @@ from app.tools.base import BaseTool, ToolContext, ToolResult
 class ChapterGetTool(BaseTool):
     name = "chapter_get"
     description = "按章节号获取原文、摘要或关键情节。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "chapter_num": {"type": "integer", "description": "章节号"},
+            "mode": {
+                "type": "string",
+                "enum": ["full", "summary", "key_events"],
+                "description": "full=完整原文, summary=摘要, key_events=关键情节",
+            },
+        },
+        "required": ["chapter_num"],
+    }
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         if not context.novel_id:
