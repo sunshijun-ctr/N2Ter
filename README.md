@@ -133,11 +133,11 @@ http://localhost:5173
 
 当前可先使用以下展示位，后续将对应截图文件放入 `docs/images/` 即可显示：
 
-<!--
-![上传小说页面](docs/images/upload-page.png)
-![预处理进度页面](docs/images/preprocess-page.png)
-![剧本编辑器页面](docs/images/editor-page.png)
--->
+
+[上传小说页面](docs/images/upload-page.png)
+[预处理进度页面](docs/images/preprocess-page.png)
+[剧本编辑器页面](docs/images/editor-page.png)
+
 
 ## 本地开发部署
 
