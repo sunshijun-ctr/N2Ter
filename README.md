@@ -121,6 +121,24 @@ npm run dev
 http://localhost:5173
 ```
 
+## 项目截图展示
+
+项目截图统一放在 `docs/images/` 目录下，推荐使用 PNG 或 JPG 格式。上传截图后，可以按下面的方式在 README 中展示：
+
+```markdown
+![上传小说页面](docs/images/upload-page.png)
+![预处理进度页面](docs/images/preprocess-page.png)
+![剧本编辑器页面](docs/images/editor-page.png)
+```
+
+当前可先使用以下展示位，后续将对应截图文件放入 `docs/images/` 即可显示：
+
+<!--
+![上传小说页面](docs/images/upload-page.png)
+![预处理进度页面](docs/images/preprocess-page.png)
+![剧本编辑器页面](docs/images/editor-page.png)
+-->
+
 ## 本地开发部署
 
 不使用 Docker 时，需要本机已有 PostgreSQL、Redis，并按需启动 Chroma。
