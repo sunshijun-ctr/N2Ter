@@ -149,6 +149,9 @@ export const api = {
   },
 
   episodes: {
+    /** 原始 API 响应（概览版文档需直接用 content JSON，避免 mapper 丢失字段） */
+    listRaw: async (screenplayId: string): Promise<ApiEpisodeRead[]> =>
+      request<ApiEpisodeRead[]>(`/screenplays/${screenplayId}/episodes`),
     list: async (screenplayId: string): Promise<Episode[]> => {
       const data = await request<ApiEpisodeRead[]>(`/screenplays/${screenplayId}/episodes`)
       return data.map(mapEpisode)

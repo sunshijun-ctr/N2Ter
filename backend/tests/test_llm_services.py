@@ -626,6 +626,14 @@ def test_overview_fallback_document_shape() -> None:
     assert doc["is_fallback"] is True
 
 
+def test_overview_rejects_malformed_llm_document() -> None:
+    from app.services.overview_service import overview_service
+
+    assert overview_service._is_usable_document({"data": -1.0}) is False
+    assert overview_service._is_usable_document({"logline": "一句话故事"}) is True
+    assert overview_service._is_usable_document({"episodes": [{"title": "第一集"}]}) is True
+
+
 def test_word_render_docx_screenwriter() -> None:
     from app.exporters.word_exporter import word_exporter
 

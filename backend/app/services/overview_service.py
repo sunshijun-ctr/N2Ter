@@ -29,7 +29,6 @@ from app.models import (
 )
 from app.services.generation_service import generation_service
 from app.services.llm_service import LLMError, llm_service
-from app.services.prompt_loader import prompt_loader
 
 _CHAPTER_REF = re.compile(r"第\s*(\d+)\s*章")
 
@@ -55,36 +54,68 @@ class OverviewService:
                 document = await self._generate_with_llm(novel, chapters)
             except LLMError:
                 document = None
-        if not document:
+        if not self._is_usable_document(document):
             document = self._fallback_document(novel, chapters)
             quality = QualityLevel.fallback
 
-        screenplay = Screenplay(
-            novel_id=novel.id,
-            schema_type=SchemaType.overview,
-            schema_version="overview-1.0",
-            status=ScreenplayStatus.completed,
-            is_auto_generated=True,
-            quality=quality,
-            # Mirror the document's episode breakdown into ``adaptation_plan`` so
-            # the overview screenplay is renderable through the same plan-based UI
-            # path as ordinary screenplays (the full document still lives on the
-            # episode below).
-            adaptation_plan=self._adaptation_plan_from_document(document, chapters),
-            style_preferences={"title": f"{novel.title} 概览版"},
-        )
-        db.add(screenplay)
+        adaptation_plan = self._adaptation_plan_from_document(document, chapters)
+        screenplay = (
+            await db.execute(
+                select(Screenplay).where(
+                    Screenplay.novel_id == novel.id,
+                    Screenplay.schema_type == SchemaType.overview,
+                    Screenplay.is_auto_generated.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if screenplay:
+            screenplay.schema_version = "overview-1.0"
+            screenplay.status = ScreenplayStatus.completed
+            screenplay.quality = quality
+            screenplay.adaptation_plan = adaptation_plan
+            screenplay.style_preferences = {"title": f"{novel.title} 概览版"}
+        else:
+            screenplay = Screenplay(
+                novel_id=novel.id,
+                schema_type=SchemaType.overview,
+                schema_version="overview-1.0",
+                status=ScreenplayStatus.completed,
+                is_auto_generated=True,
+                quality=quality,
+                # Mirror the document's episode breakdown into ``adaptation_plan`` so
+                # the overview screenplay is renderable through the same plan-based UI
+                # path as ordinary screenplays (the full document still lives on the
+                # episode below).
+                adaptation_plan=adaptation_plan,
+                style_preferences={"title": f"{novel.title} 概览版"},
+            )
+            db.add(screenplay)
         await db.flush()
 
-        episode = Episode(
-            screenplay_id=screenplay.id,
-            episode_num=1,
-            title=novel.title,
-            source_chapters=[ch.chapter_num for ch in chapters],
-            status=EpisodeStatus.done,
-            content=document,
-        )
-        db.add(episode)
+        episode = (
+            await db.execute(
+                select(Episode).where(
+                    Episode.screenplay_id == screenplay.id,
+                    Episode.episode_num == 1,
+                )
+            )
+        ).scalar_one_or_none()
+        if episode:
+            episode.title = novel.title
+            episode.source_chapters = [ch.chapter_num for ch in chapters]
+            episode.status = EpisodeStatus.done
+            episode.content = document
+            episode.error_message = None
+        else:
+            episode = Episode(
+                screenplay_id=screenplay.id,
+                episode_num=1,
+                title=novel.title,
+                source_chapters=[ch.chapter_num for ch in chapters],
+                status=EpisodeStatus.done,
+                content=document,
+            )
+            db.add(episode)
         await db.flush()
         return screenplay, episode
 
@@ -140,34 +171,105 @@ class OverviewService:
         }
 
     async def _generate_with_llm(self, novel: Novel, chapters: list[Chapter]) -> dict:
-        system_prompt = prompt_loader.load("generation_agent")
         schema_definition = generation_service._schema_definition("overview")
+        system_prompt = "\n".join(
+            [
+                "你是影视制片策划和小说改编评估专家。",
+                "你的任务是基于小说预处理结果，生成供制片人/版权方快速判断项目价值的“概览版剧本”。",
+                "必须只输出一个 JSON object，不要 Markdown，不要解释，不要 YAML。",
+                "JSON 顶层必须包含这些字段：",
+                "schema_version, schema_type, title, logline, hook, genre, estimated_episodes,",
+                "target_audience, market_comparable, adaptation_difficulty, main_characters, plot_arc, episodes。",
+                "market_comparable 必须给出可理解的市场类比，格式类似：节奏类似《X》，题材接近《Y》。",
+                "adaptation_difficulty 必须是“低/中/高 —— 理由”的中文短句。",
+                "episodes 必须是非空数组，每项包含 episode_number, title, source_chapter, one_line_summary, key_scenes。",
+                "key_scenes 每项包含 location, characters, conflict, outcome, weight。",
+                "不要编造原著没有的重大情节；可以基于摘要做影视化归纳和项目评估。",
+            ]
+        )
         user_payload = {
-            "task": "generate_overview",
-            "schema_type": "overview",
             "schema_definition": schema_definition,
-            "title": novel.title,
-            "novel_summary": novel.summary or "",
-            "character_arcs": novel.character_arcs or [],
+            "novel": {
+                "title": novel.title,
+                "summary": novel.summary or "",
+                "genres": novel.user_selected_genres or [],
+                "character_arcs": novel.character_arcs or [],
+                "foreshadowing": novel.foreshadowing or [],
+            },
             "chapters": [
-                {"chapter_num": ch.chapter_num, "title": ch.title, "summary": ch.summary or ""}
+                {
+                    "chapter_num": ch.chapter_num,
+                    "title": ch.title,
+                    "summary": ch.summary or "",
+                    "key_events": ch.key_events or [],
+                }
                 for ch in chapters
             ],
-            "instruction": (
-                "基于以上预处理素材生成概览版剧本 JSON，严格遵循 overview schema："
-                "顶层含 schema_version、schema_type、title、logline、hook、genre、"
-                "estimated_episodes、market_comparable、adaptation_difficulty、"
-                "main_characters、plot_arc、episodes。不要编造原著没有的情节。"
-            ),
         }
-        document = await llm_service.generate_structured(
-            system=system_prompt,
-            user=json.dumps(user_payload, ensure_ascii=False),
-        )
+        last_document: dict | None = None
+        for attempt in range(2):
+            document = await llm_service.generate_structured(
+                system=system_prompt,
+                user=json.dumps(user_payload, ensure_ascii=False),
+                temperature=0.2,
+            )
+            document = self._normalise_llm_document(document, novel)
+            last_document = document
+            if self._is_ai_complete_document(document):
+                return document
+            user_payload["retry_instruction"] = (
+                "上一次输出缺少概览版关键字段。请重新输出完整 JSON，尤其必须补齐 "
+                "market_comparable、adaptation_difficulty 和非空 episodes。"
+            )
+            user_payload["previous_invalid_output"] = document
+        raise LLMError(f"Overview LLM output missing required fields: {last_document}")
+
+    @staticmethod
+    def _normalise_llm_document(document: dict, novel: Novel) -> dict:
+        if isinstance(document.get("data"), dict):
+            document = dict(document["data"])
         document["schema_version"] = "overview-1.0"
         document["schema_type"] = "overview"
         document.setdefault("title", novel.title)
+        if not document.get("genre"):
+            document["genre"] = (novel.user_selected_genres or [""])[0]
         return document
+
+    @staticmethod
+    def _is_ai_complete_document(document: dict | None) -> bool:
+        if not isinstance(document, dict):
+            return False
+        required_text = ("logline", "market_comparable", "adaptation_difficulty")
+        if any(not isinstance(document.get(key), str) or not document[key].strip() for key in required_text):
+            return False
+        episodes = document.get("episodes")
+        if not isinstance(episodes, list) or not episodes:
+            return False
+        return any(
+            isinstance(ep, dict)
+            and str(ep.get("title") or "").strip()
+            and str(ep.get("one_line_summary") or "").strip()
+            for ep in episodes
+        )
+
+    @staticmethod
+    def _is_usable_document(document: dict | None) -> bool:
+        """Reject malformed LLM JSON before it reaches the UI.
+
+        Some providers can return syntactically valid JSON that is semantically
+        useless for the overview schema, for example ``{"data": -1.0}``. The
+        frontend needs at least a logline or an episode list to render the
+        overview page, so fall back when those fields are missing.
+        """
+        if not isinstance(document, dict):
+            return False
+        logline = document.get("logline")
+        episodes = document.get("episodes")
+        if isinstance(logline, str) and logline.strip():
+            return True
+        if isinstance(episodes, list) and any(isinstance(ep, dict) for ep in episodes):
+            return True
+        return False
 
     def _fallback_document(self, novel: Novel, chapters: list[Chapter]) -> dict:
         summary = novel.summary or ""

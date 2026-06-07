@@ -191,6 +191,10 @@ def test_overview_generation_creates_overview_screenplay() -> None:
         assert document["schema_version"] == "overview-1.0"
         assert "episodes" in document
 
+        retry_response = client.post(f"/api/novels/{novel['id']}/overview")
+        assert retry_response.status_code == 201, retry_response.text
+        assert retry_response.json()["id"] == overview["id"]
+
 
 def test_upload_splits_chapter_headings() -> None:
     content = """

@@ -140,11 +140,15 @@ function parseOverviewEpisodesFromDoc(raw: Record<string, unknown>): OverviewEpi
   const docEpisodes = Array.isArray(raw.episodes) ? raw.episodes : []
   return docEpisodes
     .filter((ep): ep is Record<string, unknown> => ep != null && typeof ep === 'object')
-    .map((ep, index) => ({
-      episodeNum: Number(ep.episode_number ?? ep.episode_num ?? index + 1),
-      title: String(ep.title ?? `第 ${index + 1} 集`),
-      oneLineSummary: String(ep.one_line_summary ?? ep.summary ?? ''),
-    }))
+    .map((ep, index) => {
+      const title = String(ep.title ?? `第 ${index + 1} 集`)
+      const summary = String(ep.one_line_summary ?? ep.summary ?? ep.title ?? '')
+      return {
+        episodeNum: Number(ep.episode_number ?? ep.episode_num ?? index + 1),
+        title,
+        oneLineSummary: summary || title,
+      }
+    })
 }
 
 function mapOverviewEpisodesFromPlan(plan?: AdaptationPlan): OverviewEpisodeSummary[] {
@@ -156,35 +160,79 @@ function mapOverviewEpisodesFromPlan(plan?: AdaptationPlan): OverviewEpisodeSumm
   }))
 }
 
+function mergeOverviewEpisodes(
+  docEpisodes: OverviewEpisodeSummary[],
+  planEpisodes: OverviewEpisodeSummary[],
+): OverviewEpisodeSummary[] {
+  if (docEpisodes.length > 0) {
+    return docEpisodes.map((ep) => {
+      const fromPlan = planEpisodes.find((p) => p.episodeNum === ep.episodeNum)
+      const title = ep.title || fromPlan?.title || `第 ${ep.episodeNum} 集`
+      const oneLineSummary =
+        ep.oneLineSummary || fromPlan?.oneLineSummary || fromPlan?.title || title
+      return { episodeNum: ep.episodeNum, title, oneLineSummary }
+    })
+  }
+  return planEpisodes
+}
+
+/** 从 episode.content JSON 提取概览文档（兼容嵌套 document / overview 字段） */
+export function extractOverviewDocument(
+  content: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!content || typeof content !== 'object') return {}
+  if (
+    content.schema_type === 'overview' ||
+    typeof content.logline === 'string' ||
+    Array.isArray(content.episodes)
+  ) {
+    return content
+  }
+  const nested = content.document ?? content.overview
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>
+  }
+  return content
+}
+
+/** 选取最新的概览版 screenplay */
+export function pickOverviewScreenplay(screenplays: Screenplay[]): Screenplay | undefined {
+  const overviews = screenplays.filter((s) => s.schemaType === 'overview')
+  if (!overviews.length) return undefined
+  return overviews.sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
+    return tb - ta
+  })[0]
+}
+
 /** 从 overview episode.content 或 screenplay.adaptation_plan 解析概览展示数据 */
 export function mapOverviewDocument(
   doc: Record<string, unknown> | null | undefined,
   plan?: AdaptationPlan,
+  novel?: Pick<Novel, 'summary'> | null,
 ): OverviewData {
-  const raw = doc ?? {}
+  const raw = extractOverviewDocument(doc)
   const docEpisodes = parseOverviewEpisodesFromDoc(raw)
   const planEpisodes = mapOverviewEpisodesFromPlan(plan)
+  const resolvedEpisodes = mergeOverviewEpisodes(docEpisodes, planEpisodes)
 
-  // 文档 episodes 为权威来源；仅当文档无列表时才用 adaptation_plan
-  const resolvedEpisodes = docEpisodes.length > 0 ? docEpisodes : planEpisodes
-
-  // 建议集数必须与分集大纲条数一致（勿单独采用 estimated_episodes / plan.episodeCount）
   const estimatedEpisodes =
     resolvedEpisodes.length > 0
       ? resolvedEpisodes.length
       : Math.max(
-          Number(raw.estimated_episodes ?? 0),
+          Number(raw.estimated_episodes ?? raw.estimatedEpisodes ?? 0),
           Number(plan?.episodeCount ?? 0),
           1,
         )
 
   return {
-    logline: String(raw.logline ?? ''),
-    marketComparable: String(raw.market_comparable ?? ''),
-    adaptationDifficulty: String(raw.adaptation_difficulty ?? ''),
+    logline: String(raw.logline ?? raw.hook ?? novel?.summary ?? ''),
+    marketComparable: String(raw.market_comparable ?? raw.marketComparable ?? ''),
+    adaptationDifficulty: String(raw.adaptation_difficulty ?? raw.adaptationDifficulty ?? ''),
     estimatedEpisodes,
     episodes: resolvedEpisodes,
-    isFallback: Boolean(raw.is_fallback),
+    isFallback: Boolean(raw.is_fallback ?? raw.isFallback),
   }
 }
 

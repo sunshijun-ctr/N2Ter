@@ -50,6 +50,7 @@ import {
   pickScreenplay,
   enrichEpisodesFromPlan,
   mapOverviewDocument,
+  pickOverviewScreenplay,
   buildOverviewFallback,
   toAdaptationPlanPayload,
   toEpisodeContentPayload,
@@ -542,6 +543,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           : null,
       }
     })
+    if (eventType === 'overview_done' || eventType === 'preprocess_done') {
+      void get().loadOverview()
+    }
   },
 
   setCurrentNovel: (n) => set({ currentNovel: n }),
@@ -655,7 +659,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ selectedSchema: s })
     const novel = get().currentNovel
     if (novel) saveNovelSession(novel.id, { selectedSchema: s })
-    if (s && s !== 'overview') {
+    if (s === 'overview') {
+      void get().loadOverview()
+    } else if (s) {
       void get().switchToSchemaVersion(s)
     }
   },
@@ -844,12 +850,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       if (get().apiConnected) {
         const screenplays = await api.screenplays.listByNovel(novel.id)
-        const overviewSp = screenplays.find((s) => s.schemaType === 'overview')
+        const overviewSp = pickOverviewScreenplay(screenplays)
         if (overviewSp) {
-          const episodes = await api.episodes.list(overviewSp.id)
-          const doc = episodes[0]?.content as unknown as Record<string, unknown> | undefined
+          const rawEpisodes = await api.episodes.listRaw(overviewSp.id)
+          const doc = rawEpisodes[0]?.content ?? null
           set({
-            overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan),
+            overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan, novel),
           })
           return
         }
@@ -860,10 +866,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const overviewSp = getOverviewScreenplay(novel.id)
       if (overviewSp) {
-        const episodes = get().episodesByScreenplay[overviewSp.id] ?? []
-        const doc = episodes[0]?.content as Record<string, unknown> | undefined
+        const episodes =
+          get().episodesByScreenplay[overviewSp.id] ??
+          mockEpisodesByScreenplay[overviewSp.id] ??
+          []
+        const doc = episodes[0]?.content ?? null
         set({
-          overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan),
+          overviewData: mapOverviewDocument(doc, overviewSp.adaptationPlan, novel),
         })
         return
       }

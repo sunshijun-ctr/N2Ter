@@ -101,6 +101,25 @@ class LLMService:
     def enabled(self) -> bool:
         return self._settings.llm_enabled
 
+    def _apply_provider_options(self, body: dict[str, Any]) -> None:
+        """Add provider-specific OpenAI-compatible options.
+
+        DashScope Qwen3 hybrid-thinking models reject non-streaming calls unless
+        ``enable_thinking`` is explicitly disabled. The app expects plain content
+        / JSON / tool_calls, not reasoning chunks, so disable thinking by default
+        for this provider family.
+        """
+        settings = self._settings
+        base_url = settings.llm_base_url.lower()
+        model = settings.llm_model.lower()
+        if "dashscope.aliyuncs.com" in base_url and model.startswith("qwen3"):
+            body.setdefault("enable_thinking", False)
+
+    @staticmethod
+    def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
+        text = exc.response.text.strip()
+        return f"{exc.response.status_code} {text or exc.response.reason_phrase}"
+
     # ------------------------------------------------------------------ core
     async def _chat(
         self,
@@ -119,6 +138,7 @@ class LLMService:
         }
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        self._apply_provider_options(body)
 
         url = settings.llm_base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
@@ -128,6 +148,8 @@ class LLMService:
                 response.raise_for_status()
                 data = response.json()
             return data["choices"][0]["message"]["content"] or ""
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(f"LLM chat request failed: {self._http_error_detail(exc)}") from exc
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
             raise LLMError(f"LLM chat request failed: {exc}") from exc
 
@@ -207,6 +229,7 @@ class LLMService:
         # DeepSeek) reject response_format combined with tool calling.
         if json_mode and not tools:
             body["response_format"] = {"type": "json_object"}
+        self._apply_provider_options(body)
         url = settings.llm_base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
         try:
@@ -215,6 +238,10 @@ class LLMService:
                 response.raise_for_status()
                 data = response.json()
             return _recover_tool_calls_from_content(data["choices"][0]["message"])
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(
+                f"LLM tool-calling request failed: {self._http_error_detail(exc)}"
+            ) from exc
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
             raise LLMError(f"LLM tool-calling request failed: {exc}") from exc
 
@@ -240,6 +267,7 @@ class LLMService:
             "max_tokens": settings.llm_max_tokens,
             "stream": True,
         }
+        self._apply_provider_options(body)
         url = settings.llm_base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
         try:
@@ -258,6 +286,8 @@ class LLMService:
                             continue
                         if delta:
                             yield delta
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(f"LLM stream request failed: {self._http_error_detail(exc)}") from exc
         except httpx.HTTPError as exc:
             raise LLMError(f"LLM stream request failed: {exc}") from exc
 
