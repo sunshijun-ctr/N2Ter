@@ -193,7 +193,7 @@ class GenerationService:
                     max_tokens=max_tokens,
                     temperature=0.2,
                 )
-                return self._normalise_content(content, screenplay, episode)
+                return self._normalise_content(content, screenplay, episode, novel)
             except LLMError as exc:
                 last_err = exc
                 _logger.warning(
@@ -205,7 +205,7 @@ class GenerationService:
         raise last_err if last_err else LLMError("generation failed")
 
     def _normalise_content(
-        self, content: dict, screenplay: Screenplay, episode: Episode
+        self, content: dict, screenplay: Screenplay, episode: Episode, novel=None
     ) -> dict:
         content = dict(content or {})
         # If the model returned a whole-screenplay shape (scenes nested under an
@@ -214,7 +214,14 @@ class GenerationService:
         if not content.get("scenes"):
             nested = self._episode_from_collection(content, episode.episode_num)
             if nested:
-                for key in ("scenes", "episode_summary", "key_conflict", "emotional_arc", "title"):
+                for key in (
+                    "scenes",
+                    "episode_summary",
+                    "key_conflict",
+                    "emotional_arc",
+                    "title",
+                    "character_profiles",
+                ):
                     if nested.get(key) and not content.get(key):
                         content[key] = nested[key]
         schema_type = screenplay.schema_type.value
@@ -229,6 +236,34 @@ class GenerationService:
             content["scenes"] = []
         if schema_type == SchemaType.ai_video.value:
             content = self._normalise_ai_video_scenes(content, episode)
+            content = self._ensure_character_profiles(content, novel)
+        return content
+
+    @staticmethod
+    def _ensure_character_profiles(content: dict, novel) -> dict:
+        """Ensure AI video episodes carry id→中文名 mapping for char_01 refs."""
+        profiles = content.get("character_profiles")
+        if isinstance(profiles, list) and profiles:
+            return content
+        arcs = (getattr(novel, "character_arcs", None) if novel else None) or []
+        built: list[dict] = []
+        for index, arc in enumerate(arcs):
+            if not isinstance(arc, dict):
+                continue
+            name = arc.get("name")
+            if not name:
+                continue
+            built.append(
+                {
+                    "id": f"char_{index + 1:02d}",
+                    "name": str(name),
+                    "appearance": arc.get("one_liner")
+                    or (arc.get("arc") or {}).get("start")
+                    or "",
+                }
+            )
+        if built:
+            content["character_profiles"] = built
         return content
 
     @staticmethod
@@ -242,7 +277,10 @@ class GenerationService:
                 "每个 scene 含 location/scene_number 与 shots 分镜数组。"
                 "每个 shot 必填 shot_id、duration_seconds、shot_type、camera_movement、"
                 "subject、subject_action、background、lighting、generation_prompt（英文完整提示词）。"
-                "对白放在 shot.dialogue 数组。不要输出编剧版 slug_line/dialogues 顶层结构。"
+                "对白放在 shot.dialogue 数组，character_id 引用 character_profiles.id；"
+                "line 与 character_profiles.name 用中文，generation_prompt 用英文。"
+                "顶层必须包含 character_profiles（id 如 char_01 + 中文 name + appearance）。"
+                "不要输出编剧版 slug_line/dialogues 顶层结构。"
             )
         return (
             f"只生成【第 {episode_num} 集】这一集，输出**单个 JSON 对象**，"

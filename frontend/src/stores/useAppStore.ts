@@ -168,6 +168,7 @@ interface AppState {
   ) => void
   saveActiveEpisode: () => Promise<void>
   generateEpisode: (episodeId: string) => Promise<void>
+  resetEpisode: (episodeId: string) => Promise<void>
   generateAllEpisodes: () => Promise<void>
 
   ensureChatSession: () => Promise<void>
@@ -1246,6 +1247,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ globalError: e instanceof ApiError ? e.message : '生成本集失败' })
     } finally {
       stepWs?.close()
+    }
+  },
+
+  resetEpisode: async (episodeId) => {
+    const screenplayId = get().currentScreenplay?.id
+    if (!screenplayId || !get().apiConnected) return
+    try {
+      const ep = await api.episodes.reset(episodeId)
+      // 复位后清掉这集残留的执行步骤，并写回后端返回的 pending 状态。
+      set((state) => ({
+        agentStepsByEpisode: { ...state.agentStepsByEpisode, [episodeId]: [] },
+        episodesByScreenplay: {
+          ...state.episodesByScreenplay,
+          [screenplayId]: (state.episodesByScreenplay[screenplayId] ?? []).map((e) =>
+            e.id === episodeId ? ep : e,
+          ),
+        },
+      }))
+    } catch (e) {
+      set({ globalError: e instanceof ApiError ? e.message : '重置本集失败' })
     }
   },
 

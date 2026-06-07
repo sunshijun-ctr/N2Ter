@@ -12,6 +12,7 @@ from app.models import (
     Novel,
     Screenplay,
     ScreenplayStatus,
+    Task,
     TaskStatus,
     TaskType,
 )
@@ -228,6 +229,30 @@ async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db))
         status=task.status.value,
         episode_id=generated_episode.id,
     )
+
+
+@router.post("/episodes/{episode_id}/reset", response_model=EpisodeRead)
+async def reset_episode(episode_id: UUID, db: AsyncSession = Depends(get_db)) -> Episode:
+    """Recover an episode stuck in ``generating`` (e.g. its worker task was
+    killed by a container restart). Resets it to ``pending`` so it can be
+    regenerated, clears the error, and fails off any lingering task for it."""
+    episode = await db.get(Episode, episode_id)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    episode.status = EpisodeStatus.pending
+    episode.error_message = None
+    result = await db.execute(
+        select(Task).where(
+            Task.episode_id == episode_id,
+            Task.status.in_([TaskStatus.pending, TaskStatus.running]),
+        )
+    )
+    for task in result.scalars():
+        task.status = TaskStatus.failed
+        task.error_message = "任务被手动重置"
+    await db.commit()
+    await db.refresh(episode)
+    return episode
 
 
 @router.put("/episodes/{episode_id}", response_model=EpisodeRead)

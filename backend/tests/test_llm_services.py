@@ -27,16 +27,18 @@ def test_extract_json_handles_fenced_and_embedded() -> None:
     assert _extract_json('noise {"b": 2} trailing') == {"b": 2}
 
 
-def test_llm_disabled_returns_stub_contract() -> None:
+def test_llm_disabled_returns_stub_contract(monkeypatch) -> None:
     service = LLMService()
+    monkeypatch.setattr(service._settings, "llm_api_key", "")  # force disabled
     assert service.enabled is False
     result = asyncio.run(service.generate_json("system", {"z": 1, "a": 2}))
     assert result["status"] == "stub"
     assert result["payload_keys"] == ["a", "z"]
 
 
-def test_llm_disabled_stream_chat_echoes() -> None:
+def test_llm_disabled_stream_chat_echoes(monkeypatch) -> None:
     service = LLMService()
+    monkeypatch.setattr(service._settings, "llm_api_key", "")  # force disabled
 
     async def collect() -> list[str]:
         return [chunk async for chunk in service.stream_chat("你好")]
@@ -222,8 +224,11 @@ def test_estimate_tokens() -> None:
 
 
 # ------------------------------------------------------ conversation summarizer
-def test_compressor_fallback_when_llm_disabled() -> None:
+def test_compressor_fallback_when_llm_disabled(monkeypatch) -> None:
+    from app.services import conversation_compressor as module
     from app.services.conversation_compressor import conversation_compressor
+
+    monkeypatch.setattr(module.llm_service._settings, "llm_api_key", "")  # force disabled
 
     messages = [
         {"id": "m1", "role": "user", "content": "把第一集节奏放慢"},

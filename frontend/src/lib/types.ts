@@ -70,7 +70,10 @@ export interface SceneDialogue {
 
 export interface ShotDialogue {
   id: string
+  /** 界面展示用角色名（已从 character_id 解析） */
   character?: string
+  /** AI 视频 schema 原始 character_id，如 char_01 */
+  characterId?: string
   line: string
   voiceTone?: string
 }

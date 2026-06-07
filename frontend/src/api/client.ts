@@ -166,6 +166,10 @@ export const api = {
     },
     generate: async (id: string): Promise<ApiTaskRef> =>
       request<ApiTaskRef>(`/episodes/${id}/generate`, { method: 'POST' }),
+    reset: async (id: string): Promise<Episode> => {
+      const data = await request<ApiEpisodeRead>(`/episodes/${id}/reset`, { method: 'POST' })
+      return mapEpisode(data)
+    },
     patch: async (id: string, instruction: string): Promise<Episode> => {
       const data = await request<ApiEpisodeRead>(`/episodes/${id}/patch`, {
         method: 'POST',

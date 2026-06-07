@@ -11,6 +11,11 @@ import type {
   ApiTaskRead,
   ApiConversationRead,
 } from './api-types'
+import {
+  buildCharacterIdMap,
+  resolveCharacterRef,
+  toCharacterIdForSave,
+} from './character-profiles'
 import type {
   AdaptationPlan,
   AdaptationPlanItem,
@@ -191,7 +196,7 @@ export function buildOverviewFallback(
   }
 }
 
-function mapShot(raw: Record<string, unknown>, index: number): Shot {
+function mapShot(raw: Record<string, unknown>, index: number, idMap: Map<string, string>): Shot {
   const dialoguesRaw = (raw.dialogue ?? raw.dialogues ?? []) as Record<string, unknown>[]
   const emotionsRaw = (raw.character_emotion ?? []) as Record<string, unknown>[]
   return {
@@ -199,7 +204,9 @@ function mapShot(raw: Record<string, unknown>, index: number): Shot {
     shotType: raw.shot_type ? String(raw.shot_type) : undefined,
     durationSeconds:
       typeof raw.duration_seconds === 'number' ? raw.duration_seconds : undefined,
-    subject: raw.subject ? String(raw.subject) : undefined,
+    subject: raw.subject
+      ? resolveCharacterRef(String(raw.subject), idMap) || String(raw.subject)
+      : undefined,
     subjectAction: raw.subject_action ? String(raw.subject_action) : undefined,
     cameraAngle: raw.camera_angle ? String(raw.camera_angle) : undefined,
     cameraMovement: raw.camera_movement ? String(raw.camera_movement) : undefined,
@@ -208,17 +215,22 @@ function mapShot(raw: Record<string, unknown>, index: number): Shot {
     generationPrompt: raw.generation_prompt ? String(raw.generation_prompt) : undefined,
     transition: raw.transition_to_next ? String(raw.transition_to_next) : undefined,
     dialogues: (Array.isArray(dialoguesRaw) ? dialoguesRaw : [])
-      .map((d, i) => ({
-        id: String(d.id ?? `shotdlg-${index}-${i}`),
-        character: d.character_id
-          ? String(d.character_id)
-          : d.character
-            ? String(d.character)
-            : undefined,
-        line: mapDialogueLine(d),
-        voiceTone: d.voice_tone ? String(d.voice_tone) : undefined,
-      }))
-      .filter((d) => d.line),
+      .map((d, i) => {
+        const rawId = d.character_id ? String(d.character_id).trim() : undefined
+        const rawChar = d.character ? String(d.character).trim() : undefined
+        const ref = rawId ?? rawChar ?? ''
+        const characterId = rawId ?? (rawChar && /^char_\d+$/i.test(rawChar) ? rawChar : undefined)
+        const line = mapDialogueLine(d)
+        if (!line) return null
+        return {
+          id: String(d.id ?? `shotdlg-${index}-${i}`),
+          characterId,
+          character: resolveCharacterRef(ref, idMap) || undefined,
+          line,
+          voiceTone: d.voice_tone ? String(d.voice_tone) : undefined,
+        }
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null),
     emotions: (Array.isArray(emotionsRaw) ? emotionsRaw : [])
       .map((e) => String(e.emotion ?? ''))
       .filter(Boolean),
@@ -227,7 +239,7 @@ function mapShot(raw: Record<string, unknown>, index: number): Shot {
 }
 
 /** 把（已编辑的）分镜回写为后端 JSON，合并原始 raw 中未编辑的字段。 */
-function shotToJson(shot: Shot): Record<string, unknown> {
+function shotToJson(shot: Shot, idMap: Map<string, string>): Record<string, unknown> {
   const base: Record<string, unknown> = { ...(shot.raw ?? {}) }
   base.shot_id = shot.id
   if (shot.shotType !== undefined) base.shot_type = shot.shotType
@@ -241,13 +253,25 @@ function shotToJson(shot: Shot): Record<string, unknown> {
   if (shot.generationPrompt !== undefined) base.generation_prompt = shot.generationPrompt
   if (shot.transition !== undefined) base.transition_to_next = shot.transition
   const rawDlg = (Array.isArray(base.dialogue) ? base.dialogue : []) as Record<string, unknown>[]
-  base.dialogue = shot.dialogues.map((d, i) => ({
-    ...(rawDlg[i] ?? {}),
-    line: d.line,
-    ...(d.character !== undefined ? { character_id: d.character } : {}),
-    ...(d.voiceTone !== undefined ? { voice_tone: d.voiceTone } : {}),
-  }))
+  base.dialogue = shot.dialogues.map((d, i) => {
+    const existingId =
+      d.characterId ??
+      (typeof rawDlg[i]?.character_id === 'string' ? String(rawDlg[i].character_id) : undefined)
+    const character_id = toCharacterIdForSave(d.character, idMap, existingId)
+    return {
+      ...(rawDlg[i] ?? {}),
+      line: d.line,
+      ...(character_id ? { character_id } : {}),
+      ...(d.voiceTone !== undefined ? { voice_tone: d.voiceTone } : {}),
+    }
+  })
   delete base.dialogues
+  if (shot.subject !== undefined) {
+    const rawSubject =
+      typeof shot.raw?.subject === 'string' ? String(shot.raw.subject) : undefined
+    base.subject =
+      toCharacterIdForSave(shot.subject, idMap, rawSubject) ?? shot.subject
+  }
   const rawEmo = (Array.isArray(base.character_emotion)
     ? base.character_emotion
     : []) as Record<string, unknown>[]
@@ -255,7 +279,7 @@ function shotToJson(shot: Shot): Record<string, unknown> {
   return base
 }
 
-function mapScene(raw: Record<string, unknown>, index: number): Scene {
+function mapScene(raw: Record<string, unknown>, index: number, idMap: Map<string, string>): Scene {
   // 编剧 agent 输出用单数 `dialogue`（{speaker,line,subtext}）；旧版/编辑器
   // 用复数 `dialogues`（{character,line,parenthetical}）。两者都要兼容。
   const dialoguesRaw =
@@ -274,7 +298,7 @@ function mapScene(raw: Record<string, unknown>, index: number): Scene {
     // （objective/characters/rewrite_notes/source_text_excerpt 等）。
     raw,
     // AI 视频版：场景内是分镜。映射出来用于展示。
-    ...(hasShots ? { shots: shotsRaw.map((s, i) => mapShot(s, i)) } : {}),
+    ...(hasShots ? { shots: shotsRaw.map((s, i) => mapShot(s, i, idMap)) } : {}),
   }
 }
 
@@ -305,10 +329,11 @@ function mapDialogue(raw: Record<string, unknown>, index: number): SceneDialogue
 
 export function mapEpisodeContent(content: Record<string, unknown> | null | undefined): EpisodeContent {
   if (!content) return { scenes: [] }
+  const idMap = buildCharacterIdMap(content.character_profiles)
   const scenesRaw = (content.scenes as Record<string, unknown>[]) ?? []
   return {
     ...content,
-    scenes: scenesRaw.map((s, i) => mapScene(s, i)),
+    scenes: scenesRaw.map((s, i) => mapScene(s, i, idMap)),
   }
 }
 
@@ -317,12 +342,13 @@ export function toEpisodeContentPayload(
   content: EpisodeContent,
   existing?: Record<string, unknown> | null,
 ): Record<string, unknown> {
+  const idMap = buildCharacterIdMap(existing?.character_profiles ?? content.character_profiles)
   return {
     ...(existing ?? {}),
     scenes: (content.scenes ?? []).map((s, i) => {
       // AI 视频版（分镜场景）：把编辑后的分镜合并回原始 JSON，保留未编辑字段。
       if (s.shots) {
-        return { ...(s.raw ?? {}), id: s.id, shots: s.shots.map(shotToJson) }
+        return { ...(s.raw ?? {}), id: s.id, shots: s.shots.map((shot) => shotToJson(shot, idMap)) }
       }
       // 合并原始 JSON，保留 agent 字段（objective/characters/rewrite_notes/
       // source_text_excerpt 等），并把编辑同时写回两套命名以兼容前后端。

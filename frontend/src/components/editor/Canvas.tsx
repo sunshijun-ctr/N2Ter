@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react'
 import {
   Check,
   Clapperboard,
   Loader2,
   MessageSquarePlus,
   Plus,
+  RotateCcw,
   Sparkles,
   Trash2,
 } from 'lucide-react'
@@ -12,7 +14,7 @@ import { AutoInput } from '@/components/ui/auto-input'
 import { AutoTextarea } from '@/components/ui/auto-textarea'
 import { DialogueLine } from '@/components/ui/dialogue-line'
 import { useAppStore } from '@/stores/useAppStore'
-import type { Scene, Shot } from '@/lib/types'
+import type { AgentStep, Scene, Shot } from '@/lib/types'
 import { cn, formatSourceChapters } from '@/lib/utils'
 
 const labelClass = 'text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80'
@@ -111,16 +113,16 @@ function DialogueEntry({
   speakerClassName?: string
 }) {
   return (
-    <div className="grid w-full min-w-0 grid-cols-1 items-start gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-x-3">
+    <div className="relative w-full min-w-0 pr-9">
       <AutoInput
-        className={cn('w-full shrink-0 font-medium sm:w-auto', speakerClassName)}
-        minChars={2}
+        className={cn('font-semibold text-foreground', speakerClassName)}
+        minChars={3}
         value={speaker}
         onChange={(e) => onSpeakerChange(e.target.value)}
         placeholder={speakerPlaceholder}
       />
       <DialogueLine
-        className="min-w-0 sm:col-start-2"
+        className="mt-1 pl-4 sm:pl-8"
         value={line}
         onChange={onLineChange}
         placeholder={linePlaceholder}
@@ -129,7 +131,7 @@ function DialogueEntry({
         type="button"
         variant="ghost"
         size="icon"
-        className="h-8 w-8 shrink-0 self-start text-muted-foreground hover:text-destructive sm:col-start-3"
+        className="absolute right-0 top-0 h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
         onClick={onRemove}
         aria-label={removeLabel}
       >
@@ -401,6 +403,7 @@ function ShotSceneEditor({
 
       <Field label="场景标识" className="mb-4 block">
         <AutoInput
+          block
           className="text-xs"
           minChars={8}
           value={scene.heading}
@@ -478,7 +481,8 @@ function SceneEditor({
 
       <Field label="场景头" className="mb-3 block">
         <AutoInput
-          className="font-manuscript text-sm font-medium uppercase tracking-wide"
+          block
+          className="font-manuscript text-sm font-medium tracking-wide"
           minChars={8}
           value={scene.heading}
           onChange={(e) => updateScene(episodeId, scene.id, { heading: e.target.value })}
@@ -542,12 +546,87 @@ function isShotScene(scene: Scene) {
   return Boolean(scene.shots && scene.shots.length > 0)
 }
 
+/** 生成进度面板：自带一个一直在走的计时器，让用户随时能判断「还在干活 vs 卡死」。
+ *  只在本集处于 generating 时挂载，挂载时刻即生成起点。 */
+function GenerationProgress({
+  steps,
+  canReset,
+  onReset,
+}: {
+  steps: AgentStep[]
+  canReset: boolean
+  onReset: () => void
+}) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`
+  // 计时器在涨、step 在涨 → 在干活；超过这个阈值还没动静，提示可能卡住。
+  const looksStuck = elapsed > 90 && steps.length === 0
+
+  return (
+    <div className="rounded-lg border border-dashed border-border/60 p-5">
+      <div className="mb-3 flex items-center justify-between gap-2 text-sm font-medium text-foreground">
+        <span className="flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          AI 正在生成本集 · agent 执行过程
+        </span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">已用时 {mmss}</span>
+      </div>
+      {steps.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {looksStuck
+            ? '已等待较久仍无进展，可能因服务重启中断；可重置本集后重试。'
+            : '正在准备 · AI 正在思考，首步可能需要几十秒…'}
+        </p>
+      ) : (
+        <ol className="flex flex-col gap-2">
+          {steps.map((s, i) => {
+            const active = i === steps.length - 1
+            return (
+              <li key={`${s.stepIndex}-${i}`} className="flex items-start gap-2 text-sm">
+                <span className="mt-0.5 shrink-0">
+                  {active ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5 text-primary" />
+                  )}
+                </span>
+                <span
+                  className={cn('leading-snug', active ? 'text-foreground' : 'text-muted-foreground')}
+                >
+                  {s.label || s.phase}
+                  {active && <span className="ml-1.5 text-xs text-muted-foreground">· 进行中…</span>}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+      {canReset && (
+        <div className="mt-4 flex items-center gap-2 border-t border-border/40 pt-3">
+          <span className="text-xs text-muted-foreground">
+            卡住不动了？（如服务重启过）可重置本集后重新生成
+          </span>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onReset}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            重置本集
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Canvas() {
   const {
     getActiveEpisode,
     getEpisodeBlocker,
     addScene,
     generateEpisode,
+    resetEpisode,
     apiConnected,
     selectedSchema,
     currentScreenplay,
@@ -558,7 +637,7 @@ export function Canvas() {
   if (!episode) {
     return (
       <div className="manuscript-surface flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <p className="font-manuscript text-base text-muted-foreground">请选择左侧一集开始编辑</p>
+        <p className="font-manuscript text-base text-muted-foreground">请选择上方分集开始编辑</p>
         <p className="mt-1 text-xs text-muted-foreground/80">画布内容会随分集切换自动保存到本地会话</p>
       </div>
     )
@@ -593,56 +672,42 @@ export function Canvas() {
 
         <div className="flex w-full flex-col gap-6">
           {episode.status === 'generating' ? (
-            <div className="rounded-lg border border-dashed border-border/60 p-5">
-              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                AI 正在生成本集 · agent 执行过程
-              </div>
-              {agentSteps.length === 0 ? (
-                <p className="text-xs text-muted-foreground">正在准备…</p>
-              ) : (
-                <ol className="flex flex-col gap-2">
-                  {agentSteps.map((s, i) => {
-                    const active = i === agentSteps.length - 1
-                    return (
-                      <li
-                        key={`${s.stepIndex}-${i}`}
-                        className="flex items-start gap-2 text-sm"
-                      >
-                        <span className="mt-0.5 shrink-0">
-                          {active ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                          ) : (
-                            <Check className="h-3.5 w-3.5 text-primary" />
-                          )}
-                        </span>
-                        <span
-                          className={cn(
-                            'leading-snug',
-                            active ? 'text-foreground' : 'text-muted-foreground',
-                          )}
-                        >
-                          {s.label || s.phase}
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ol>
-              )}
-            </div>
+            <GenerationProgress
+              steps={agentSteps}
+              canReset={apiConnected}
+              onReset={() => void resetEpisode(episode.id)}
+            />
           ) : scenes.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-muted-foreground">
               <span>{episode.status === 'failed' ? '本集生成失败' : '本集暂无内容'}</span>
+              {episode.status === 'failed' && episode.errorMessage && (
+                <span className="max-w-md text-xs text-muted-foreground/80">
+                  {episode.errorMessage}
+                </span>
+              )}
               {apiConnected &&
                 (blockerNum !== null ? (
                   <span className="text-xs text-muted-foreground">
                     需先完成第 {blockerNum} 集（剧集按顺序依赖前文生成）
                   </span>
                 ) : (
-                  <Button size="sm" onClick={() => void generateEpisode(episode.id)}>
-                    <Sparkles className="h-4 w-4" />
-                    {episode.status === 'failed' ? '重新生成本集' : 'AI 生成本集'}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={() => void generateEpisode(episode.id)}>
+                      <Sparkles className="h-4 w-4" />
+                      {episode.status === 'failed' ? '重新生成本集' : 'AI 生成本集'}
+                    </Button>
+                    {episode.status === 'failed' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground"
+                        onClick={() => void resetEpisode(episode.id)}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        重置
+                      </Button>
+                    )}
+                  </div>
                 ))}
             </div>
           ) : (

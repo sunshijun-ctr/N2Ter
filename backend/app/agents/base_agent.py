@@ -1,10 +1,11 @@
 import json
 from typing import Any
 
+from app.core import get_settings
 from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
 from app.services.skill_loader import skill_loader
-from app.tools.base import ToolContext
+from app.tools.base import ToolContext, ToolResult
 from app.tools.registry import tool_registry
 
 
@@ -56,14 +57,21 @@ class BaseAgent:
         history: list[dict[str, str]] | None = None,
         context: ToolContext | None = None,
         skill_id: str | None = None,
-        max_iters: int = 5,
+        max_iters: int | None = None,
     ) -> dict[str, Any]:
         """Run a real tool-calling loop and return the final assistant reply.
 
         Requires a configured LLM. The loop lets the model call the registered
-        tools (chapter_get, chapter_search, episode_patch, ...) until it
-        produces a natural-language answer or ``max_iters`` is reached.
+        tools until it answers or hits ``max_iters`` rounds. Each tool may be
+        called at most ``agent_tool_call_limit`` times, except the paragraph
+        search tool which is unlimited (configured via settings).
         """
+        settings = get_settings()
+        if max_iters is None:
+            max_iters = settings.agent_max_iters
+        tool_limit = settings.agent_tool_call_limit
+        unlimited_tool = settings.agent_unlimited_tool
+
         ctx = context or ToolContext()
         system_prompt = self.build_system_prompt(skill_id)
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -72,6 +80,7 @@ class BaseAgent:
 
         tool_specs = self.tools.openai_tools()
         trace: list[dict[str, Any]] = []
+        tool_counts: dict[str, int] = {}
 
         for _ in range(max_iters):
             assistant = await self.llm.chat_with_tools(messages, tool_specs)
@@ -90,7 +99,18 @@ class BaseAgent:
                     args = json.loads(fn.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                result = await self.tools.execute(name, args, ctx)
+
+                # Enforce per-tool call limit (paragraph search is exempt).
+                if name != unlimited_tool and tool_counts.get(name, 0) >= tool_limit:
+                    result = ToolResult(
+                        status="failed",
+                        error=f"工具 {name} 已达调用上限({tool_limit}次)，请基于已有信息作答。",
+                    )
+                else:
+                    result = await self.tools.execute(name, args, ctx)
+                    if name != unlimited_tool:
+                        tool_counts[name] = tool_counts.get(name, 0) + 1
+
                 trace.append({"tool": name, "args": args, "result": result.model_dump()})
                 messages.append(
                     {

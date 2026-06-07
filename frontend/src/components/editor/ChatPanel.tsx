@@ -44,7 +44,7 @@ export function ChatPanel() {
 
   return (
     <WorkspacePanel
-      width="md"
+      width="sm"
       title="对话修改"
       subtitle={
         activeEpisode

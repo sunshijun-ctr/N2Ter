@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # provider rate limits. Raise it if your quota allows.
     preprocess_concurrency: int = 5
 
+    # ----- Conversation agent (ReAct) loop limits -----
+    # Keep it snappy: at most N tool-calling rounds before a forced answer,
+    # and cap how often each tool may be called (the paragraph-search tool is
+    # exempt / unlimited).
+    agent_max_iters: int = 2
+    agent_tool_call_limit: int = 3
+    agent_unlimited_tool: str = "chapter_search"
+
     # ----- Conversation auto-compression (Design.md §10.4.3) -----
     auto_compress_enabled: bool = True
     context_window_tokens: int = 200_000

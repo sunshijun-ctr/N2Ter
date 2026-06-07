@@ -195,17 +195,44 @@ class PDFExporter:
         return "".join(parts)
 
     # -------------------------------------------------------------- ai_video
+    @staticmethod
+    def _character_id_map(content: dict) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for item in content.get("character_profiles") or []:
+            if not isinstance(item, dict):
+                continue
+            cid = item.get("id") or item.get("character_id")
+            name = item.get("name")
+            if cid and name:
+                mapping[str(cid)] = str(name)
+        return mapping
+
+    @staticmethod
+    def _resolve_character_ref(ref: str, id_map: dict[str, str]) -> str:
+        ref = (ref or "").strip()
+        if not ref:
+            return ""
+        if ref in id_map:
+            return id_map[ref]
+        import re
+
+        if re.match(r"^char_\d+$", ref, re.I):
+            match = re.search(r"\d+", ref)
+            return f"角色 {match.group()}" if match else ref
+        return ref
+
     def _render_ai_video(self, episodes: list[dict]) -> str:
         parts: list[str] = []
         for episode in episodes:
             content = episode.get("content") or {}
+            id_map = self._character_id_map(content)
             num = escape(str(content.get("episode_number", episode.get("episode_number", ""))))
             ep_title = escape(str(content.get("title") or episode.get("title") or ""))
             parts.append(f"<div class='episode'><h2>第 {num} 集 · {ep_title}</h2>")
             top_shots = content.get("shots")
             if isinstance(top_shots, list) and top_shots:
                 for index, shot in enumerate(top_shots, start=1):
-                    parts.append(self._render_ai_video_shot(shot, index))
+                    parts.append(self._render_ai_video_shot(shot, index, id_map))
             else:
                 for scene in content.get("scenes") or []:
                     scene_label = (
@@ -216,11 +243,11 @@ class PDFExporter:
                     if scene_label:
                         parts.append(f"<h3>{escape(str(scene_label))}</h3>")
                     for index, shot in enumerate(scene.get("shots") or [], start=1):
-                        parts.append(self._render_ai_video_shot(shot, index))
+                        parts.append(self._render_ai_video_shot(shot, index, id_map))
             parts.append("</div>")
         return "".join(parts)
 
-    def _render_ai_video_shot(self, shot: dict, index: int) -> str:
+    def _render_ai_video_shot(self, shot: dict, index: int, id_map: dict[str, str]) -> str:
         parts = ["<div class='scene'>"]
         shot_id = shot.get("shot_id") or shot.get("id")
         label = f"镜头 {index}"
@@ -240,9 +267,15 @@ class PDFExporter:
         ):
             value = shot.get(key)
             if value not in (None, ""):
-                parts.append(f"<div class='kv'><b>{label}</b>{escape(str(value))}</div>")
+                display = (
+                    self._resolve_character_ref(str(value), id_map)
+                    if key == "subject"
+                    else str(value)
+                )
+                parts.append(f"<div class='kv'><b>{label}</b>{escape(display)}</div>")
         for dialogue in shot.get("dialogue") or shot.get("dialogues") or []:
-            who = dialogue.get("character_id") or dialogue.get("character") or ""
+            raw_who = dialogue.get("character_id") or dialogue.get("character") or ""
+            who = self._resolve_character_ref(str(raw_who), id_map)
             line = dialogue.get("line") or dialogue.get("text") or ""
             if not line:
                 continue

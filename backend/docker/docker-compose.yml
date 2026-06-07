@@ -12,6 +12,8 @@ x-app-env: &app-env
   CHROMA_PORT: "8000"
   ASYNC_TASKS_ENABLED: "${ASYNC_TASKS_ENABLED:-true}"
   PREPROCESS_CONCURRENCY: "${PREPROCESS_CONCURRENCY:-5}"
+  AGENT_MAX_ITERS: "${AGENT_MAX_ITERS:-2}"
+  AGENT_TOOL_CALL_LIMIT: "${AGENT_TOOL_CALL_LIMIT:-3}"
   # LLM (OpenAI-compatible). Empty key -> deterministic fallback mode.
   # LLM_PROVIDER=deepseek auto-fills base_url + model (key still required).
   LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
@@ -26,6 +28,7 @@ x-app-env: &app-env
   EMBEDDING_BATCH_SIZE: "${EMBEDDING_BATCH_SIZE:-10}"
   RERANK_URL: "${RERANK_URL:-}"
   RERANK_API_KEY: "${RERANK_API_KEY:-}"
+  RERANK_MODEL: "${RERANK_MODEL:-bge-reranker-v2-m3}"
 
 services:
   api:

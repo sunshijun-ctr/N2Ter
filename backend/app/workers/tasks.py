@@ -6,10 +6,13 @@ asyncpg connection bound to an already-closed event loop across invocations.
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 from uuid import UUID
 
+from celery.signals import worker_ready
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core import get_settings
@@ -23,11 +26,16 @@ from app.models import (
     TaskStatus,
     TaskType,
 )
+
 from app.services.export_service import export_service
 from app.services.episode_writing_agent_service import episode_writing_agent_service
 from app.services.preprocessing_service import preprocessing_service
 from app.services.task_service import task_service
 from app.workers.celery_app import celery_app
+
+_logger = logging.getLogger(__name__)
+
+_ORPHAN_MESSAGE = "服务重启导致任务中断，请重新生成或重置本集"
 
 T = TypeVar("T")
 
@@ -45,6 +53,43 @@ def _run(coro_factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
             await engine.dispose()
 
     return asyncio.run(_main())
+
+
+@worker_ready.connect
+def _recover_orphans(**_kwargs) -> None:
+    """When the worker (re)starts, anything left mid-flight by the previously
+    killed worker is an orphan: the task process is gone but the DB still reads
+    ``generating`` / ``running``. Mark these failed so the UI shows them as
+    recoverable (retry / 重置本集) instead of spinning forever.
+
+    This runs only in the worker — the process whose death creates orphans — so
+    rebuilding just the api never disturbs a live generation. At ``worker_ready``
+    no task is executing yet (redis redelivery waits for the visibility timeout),
+    so the sweep cannot race an in-flight run.
+    """
+
+    async def _sweep(db: AsyncSession) -> None:
+        await db.execute(
+            update(Episode)
+            .where(Episode.status == EpisodeStatus.generating)
+            .values(status=EpisodeStatus.failed, error_message=_ORPHAN_MESSAGE)
+        )
+        await db.execute(
+            update(Novel)
+            .where(Novel.status == NovelStatus.preprocessing)
+            .values(status=NovelStatus.preprocessing_failed, error_message=_ORPHAN_MESSAGE)
+        )
+        await db.execute(
+            update(Task)
+            .where(Task.status.in_([TaskStatus.pending, TaskStatus.running]))
+            .values(status=TaskStatus.failed, error_message=_ORPHAN_MESSAGE)
+        )
+        await db.commit()
+
+    try:
+        _run(_sweep)
+    except Exception as exc:  # noqa: BLE001 - recovery must never block startup
+        _logger.warning("Orphan recovery on worker startup failed: %s", exc)
 
 
 async def _load_or_create_task(
