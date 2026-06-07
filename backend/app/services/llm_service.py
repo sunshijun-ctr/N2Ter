@@ -19,6 +19,54 @@ class LLMError(RuntimeError):
     """Raised when a real LLM call fails. Callers may catch and fall back."""
 
 
+# Some DeepSeek models leak their function-calling template (the
+# ``<｜｜DSML｜｜invoke name="...">`` markup) into ``content`` as plain text instead
+# of returning structured ``tool_calls``. The agent loop then sees no tool calls
+# and stops mid-task. These patterns recover the calls from that leaked markup.
+_DSML_INVOKE_RE = re.compile(r'invoke\s+name="([^"]+)"(.*?)</[^>]*invoke>', re.S)
+_DSML_PARAM_RE = re.compile(
+    r'parameter\s+name="([^"]+)"([^>]*)>(.*?)</[^>]*parameter>', re.S
+)
+
+
+def _recover_tool_calls_from_content(message: dict[str, Any]) -> dict[str, Any]:
+    """If the model returned no structured tool_calls but its content contains
+    the leaked invoke/parameter markup, parse it back into proper tool_calls so
+    the agent loop can execute them. No-op for normal responses."""
+    if message.get("tool_calls"):
+        return message
+    content = message.get("content") or ""
+    if "invoke name=" not in content or "DSML" not in content:
+        return message
+    calls: list[dict[str, Any]] = []
+    for i, invoke in enumerate(_DSML_INVOKE_RE.finditer(content)):
+        name = invoke.group(1)
+        args: dict[str, Any] = {}
+        for param in _DSML_PARAM_RE.finditer(invoke.group(2)):
+            pname, attrs, value = param.group(1), param.group(2), param.group(3).strip()
+            if 'string="false"' in attrs:  # provider hint: value is not a string
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            args[pname] = value
+        calls.append(
+            {
+                "id": f"dsml_{i}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+            }
+        )
+    if not calls:
+        return message
+    # Drop the leaked markup, keeping any natural-language preamble before it.
+    idx = content.find("DSML")
+    lt = content.rfind("<", 0, idx)
+    message["content"] = (content[:lt] if lt != -1 else "").rstrip()
+    message["tool_calls"] = calls
+    return message
+
+
 _JSON_BLOCK = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 
 
@@ -166,7 +214,7 @@ class LLMService:
                 response = await client.post(url, json=body, headers=headers)
                 response.raise_for_status()
                 data = response.json()
-            return data["choices"][0]["message"]
+            return _recover_tool_calls_from_content(data["choices"][0]["message"])
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
             raise LLMError(f"LLM tool-calling request failed: {exc}") from exc
 

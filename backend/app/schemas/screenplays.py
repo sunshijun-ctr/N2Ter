@@ -68,6 +68,12 @@ class EpisodePatchRequest(BaseModel):
     instruction: str = Field(min_length=1)
 
 
+class EpisodeGenerateRequest(BaseModel):
+    # Optional regeneration direction (e.g. "把所有人写得更兴奋"). When present the
+    # episode agent regenerates this episode steered by the instruction.
+    instruction: str | None = None
+
+
 class ScreenplayGenerateRequest(BaseModel):
     start_episode: int = Field(default=1, ge=1)
     end_episode: int | None = Field(default=None, ge=1)

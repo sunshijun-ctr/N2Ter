@@ -13,6 +13,7 @@ from app.schemas.prompts import PromptInfo, PromptRead
 from app.schemas.screenplays import (
     AdaptationPlanRead,
     AdaptationPlanRequest,
+    EpisodeGenerateRequest,
     EpisodeRead,
     EpisodePatchRequest,
     EpisodeUpdate,
@@ -36,6 +37,7 @@ __all__ = [
     "ConversationCreate",
     "ConversationRead",
     "EpisodeRead",
+    "EpisodeGenerateRequest",
     "EpisodePatchRequest",
     "EpisodeTaskRef",
     "EpisodeUpdate",

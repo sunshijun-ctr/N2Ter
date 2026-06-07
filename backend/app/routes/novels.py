@@ -43,7 +43,9 @@ async def create_novel(payload: NovelCreate, db: AsyncSession = Depends(get_db))
         word_count=len(payload.content),
     )
     db.add(novel)
-    for parsed_chapter in split_chapters(payload.content):
+    for parsed_chapter in split_chapters(
+        payload.content, words_per_chapter=payload.words_per_chapter
+    ):
         db.add(
             Chapter(
                 novel_id=novel_id,

@@ -22,6 +22,7 @@ export interface ApiNovelCreate {
   author?: string | null
   content: string
   genres: string[]
+  words_per_chapter?: number
 }
 
 export interface ApiChapterRead extends ApiTimestamped {

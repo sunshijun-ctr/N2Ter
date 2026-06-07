@@ -6,6 +6,7 @@ without any real network calls or database.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -25,6 +26,37 @@ from app.services.vector_store_service import vector_store_service
 def test_extract_json_handles_fenced_and_embedded() -> None:
     assert _extract_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert _extract_json('noise {"b": 2} trailing') == {"b": 2}
+
+
+def test_recover_tool_calls_from_leaked_dsml_markup() -> None:
+    from app.services.llm_service import _recover_tool_calls_from_content
+
+    content = (
+        "好的，先查原著。\n\n"
+        '<｜｜DSML｜｜tool_calls>\n'
+        '<｜｜DSML｜｜invoke name="chapter_get">\n'
+        '<｜｜DSML｜｜parameter name="chapter_num" string="false">14</｜｜DSML｜｜parameter>\n'
+        "</｜｜DSML｜｜invoke>\n"
+        '<｜｜DSML｜｜invoke name="chapter_search">\n'
+        '<｜｜DSML｜｜parameter name="query">婚礼</｜｜DSML｜｜parameter>\n'
+        "</｜｜DSML｜｜invoke>\n"
+        "</｜｜DSML｜｜tool_calls>"
+    )
+    msg = _recover_tool_calls_from_content({"role": "assistant", "content": content})
+    calls = msg["tool_calls"]
+    assert [c["function"]["name"] for c in calls] == ["chapter_get", "chapter_search"]
+    assert json.loads(calls[0]["function"]["arguments"]) == {"chapter_num": 14}
+    assert json.loads(calls[1]["function"]["arguments"]) == {"query": "婚礼"}
+    assert "DSML" not in (msg["content"] or "")
+    assert msg["content"] == "好的，先查原著。"
+
+
+def test_recover_tool_calls_noop_for_normal_message() -> None:
+    from app.services.llm_service import _recover_tool_calls_from_content
+
+    msg = _recover_tool_calls_from_content({"role": "assistant", "content": "普通回复"})
+    assert "tool_calls" not in msg
+    assert msg["content"] == "普通回复"
 
 
 def test_llm_disabled_returns_stub_contract(monkeypatch) -> None:

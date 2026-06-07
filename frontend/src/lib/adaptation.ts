@@ -1,10 +1,10 @@
 import type { AdaptationPlan, AdaptationPlanItem } from './types'
+import { suggestEpisodeTitle } from './episode-title'
 
 /** 按集数均匀分配章节（mock；后端 planning_agent 替换） */
 export function buildAdaptationPlan(
   totalChapters: number,
   episodeCount: number,
-  novelTitle = '',
 ): AdaptationPlan {
   const clamped = Math.max(1, Math.min(episodeCount, totalChapters))
   const items: AdaptationPlanItem[] = []
@@ -29,7 +29,7 @@ export function buildAdaptationPlan(
 
     items.push({
       episodeNum: ep,
-      title: `${novelTitle ? novelTitle.slice(0, 4) : '改编'} · 第 ${ep} 集`,
+      title: suggestEpisodeTitle(ep, sourceChapters),
       sourceChapters,
       oneLineSummary: `覆盖${range}`,
     })

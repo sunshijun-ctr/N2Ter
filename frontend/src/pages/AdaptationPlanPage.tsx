@@ -41,7 +41,13 @@ function StatTile({
   )
 }
 
-function EpisodePlanRow({ item }: { item: AdaptationPlanItem }) {
+function EpisodePlanRow({
+  item,
+  onTitleChange,
+}: {
+  item: AdaptationPlanItem
+  onTitleChange: (title: string) => void
+}) {
   const rangeLabel = formatSourceChapters(item.sourceChapters)
   const dense = item.sourceChapters.length > 6
 
@@ -62,6 +68,16 @@ function EpisodePlanRow({ item }: { item: AdaptationPlanItem }) {
             {item.sourceChapters.length} 章
           </span>
         </div>
+        <label className="mt-2 block">
+          <span className="sr-only">第 {item.episodeNum} 集名称</span>
+          <input
+            type="text"
+            value={item.title}
+            onChange={(e) => onTitleChange(e.target.value)}
+            placeholder="为本集取个名字，如：奇遇初现"
+            className="w-full rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/15"
+          />
+        </label>
         {!dense && item.sourceChapters.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {item.sourceChapters.map((ch) => (
@@ -91,8 +107,10 @@ export function AdaptationPlanPage() {
     selectedSchema,
     adaptationPlan,
     setAdaptationPlan,
+    updateAdaptationPlanItemTitle,
     confirmPlan,
     fetchAdaptationPlan,
+    switchToSchemaVersion,
     apiConnected,
   } = useAppStore()
 
@@ -103,11 +121,18 @@ export function AdaptationPlanPage() {
 
   const fetchedRef = useRef(false)
   useEffect(() => {
-    if (!apiConnected || !currentNovel || fetchedRef.current) return
+    fetchedRef.current = false
+  }, [selectedSchema, currentNovel?.id])
+
+  useEffect(() => {
+    if (!currentNovel || fetchedRef.current) return
     if (!selectedSchema || selectedSchema === 'overview') return
     fetchedRef.current = true
-    void fetchAdaptationPlan()
-  }, [apiConnected, currentNovel?.id, selectedSchema, fetchAdaptationPlan])
+    void (async () => {
+      await switchToSchemaVersion(selectedSchema)
+      if (apiConnected) await fetchAdaptationPlan()
+    })()
+  }, [apiConnected, currentNovel?.id, selectedSchema, fetchAdaptationPlan, switchToSchemaVersion])
 
   useEffect(() => {
     if (adaptationPlan?.episodeCount) setEpisodeCount(adaptationPlan.episodeCount)
@@ -128,9 +153,7 @@ export function AdaptationPlanPage() {
   function applyEpisodeCount(count: number) {
     const next = clampCount(count)
     setEpisodeCount(next)
-    setAdaptationPlan(
-      buildAdaptationPlan(totalChapters, next, currentNovel?.title ?? ''),
-    )
+    setAdaptationPlan(buildAdaptationPlan(totalChapters, next))
   }
 
   async function handleRegenerate() {
@@ -140,9 +163,7 @@ export function AdaptationPlanPage() {
       await fetchAdaptationPlan(chaptersPerEpisode)
     } else {
       await new Promise((r) => setTimeout(r, 800))
-      setAdaptationPlan(
-        buildAdaptationPlan(totalChapters, episodeCount, currentNovel?.title ?? ''),
-      )
+      setAdaptationPlan(buildAdaptationPlan(totalChapters, episodeCount))
     }
     setRegenerating(false)
   }
@@ -276,7 +297,11 @@ export function AdaptationPlanPage() {
             </div>
             <div className="max-h-[min(52vh,520px)] space-y-2 overflow-auto pr-1">
               {plan?.items.map((item) => (
-                <EpisodePlanRow key={item.episodeNum} item={item} />
+                <EpisodePlanRow
+                  key={item.episodeNum}
+                  item={item}
+                  onTitleChange={(title) => updateAdaptationPlanItemTitle(item.episodeNum, title)}
+                />
               ))}
             </div>
           </section>

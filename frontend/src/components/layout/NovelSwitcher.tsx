@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ChevronDown, Library, Trash2 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { ChevronDown, Library, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/ui/loading'
@@ -26,9 +27,14 @@ interface NovelSwitcherProps {
 }
 
 export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProps) {
+  const navigate = useNavigate()
   const { novels, currentNovel, switchNovel, deleteNovel } = useAppStore()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(true)
+
+  function startNewProject() {
+    navigate('/', { state: { newProject: true } })
+  }
 
   async function handleDelete(novelId: string, title: string) {
     if (deletingId) return
@@ -42,7 +48,7 @@ export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProp
 
   if (collapsed) {
     return (
-      <div className="flex justify-center border-b border-border/50 py-2.5">
+      <div className="flex justify-center gap-0.5 border-b border-border/50 py-2.5">
         <Button
           variant="ghost"
           size="icon"
@@ -53,31 +59,56 @@ export function NovelSwitcher({ collapsed = false, onExpand }: NovelSwitcherProp
         >
           <Library className="h-[18px] w-[18px]" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-10 w-10"
+          title="新建项目"
+          aria-label="新建项目"
+          onClick={startNewProject}
+        >
+          <Plus className="h-[18px] w-[18px]" />
+        </Button>
       </div>
     )
   }
 
   return (
     <div className="border-b border-border/50 px-3 py-3">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="mb-2 flex w-full cursor-pointer items-center justify-between px-1 text-left"
-        aria-expanded={expanded}
-      >
-        <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-          项目库
-        </span>
-        <ChevronDown
-          className={cn(
-            'h-3.5 w-3.5 text-muted-foreground transition-transform duration-200',
-            expanded && 'rotate-180',
-          )}
-        />
-      </button>
+      <div className="mb-2 flex w-full items-center gap-1 px-1">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex min-w-0 flex-1 cursor-pointer items-center justify-between text-left"
+          aria-expanded={expanded}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+            项目库
+          </span>
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200',
+              expanded && 'rotate-180',
+            )}
+          />
+        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+          title="新建项目（不会覆盖已有项目）"
+          aria-label="新建项目"
+          onClick={startNewProject}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
 
       {novels.length === 0 ? (
-        <p className="px-1 text-xs leading-relaxed text-muted-foreground">暂无项目，请先上传小说</p>
+        <p className="px-1 text-xs leading-relaxed text-muted-foreground">
+          暂无项目，点击右侧 ＋ 或上传页创建第一个项目
+        </p>
       ) : expanded ? (
         <ul className="max-h-48 space-y-1.5 overflow-y-auto pr-0.5">
           {novels.map((novel) => {

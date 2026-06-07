@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Save, Sparkles } from 'lucide-react'
+import { Download, Loader2, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EpisodeList } from '@/components/editor/EpisodeList'
 import { Canvas } from '@/components/editor/Canvas'
-import { ChatPanel } from '@/components/editor/ChatPanel'
 import { useAppStore } from '@/stores/useAppStore'
+
+const schemaLabels: Record<string, string> = {
+  ai_video: 'AI 视频版',
+  screenwriter: '编剧版',
+  overview: '概览版',
+}
 
 export function EditorPage() {
   const {
@@ -12,17 +17,19 @@ export function EditorPage() {
     apiConnected,
     saveActiveEpisode,
     generateEpisode,
-    generateAllEpisodes,
-    generatingAll,
-    getEpisodes,
     getEpisodeBlocker,
+    currentNovel,
+    currentScreenplay,
+    selectedSchema,
+    switchToSchemaVersion,
   } = useAppStore()
   const activeEpisode = useAppStore((s) => s.getActiveEpisode())
   const [saving, setSaving] = useState(false)
 
-  const pendingCount = getEpisodes().filter(
-    (e) => e.status === 'pending' || e.status === 'failed',
-  ).length
+  useEffect(() => {
+    if (!selectedSchema || selectedSchema === 'overview' || !currentNovel) return
+    void switchToSchemaVersion(selectedSchema)
+  }, [selectedSchema, currentNovel?.id, switchToSchemaVersion])
 
   const triggered = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -40,56 +47,56 @@ export function EditorPage() {
     setSaving(false)
   }
 
+  const schemaLabel =
+    (currentScreenplay?.schemaType && schemaLabels[currentScreenplay.schemaType]) ||
+    '剧本'
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="glass-panel shrink-0 border-b border-border/40 px-3 py-2 sm:px-4">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="flex min-w-0 flex-1 justify-center overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <EpisodeList />
+      <header className="editor-toolbar">
+        <div className="flex items-center justify-between gap-2 border-b border-border/30 px-3 py-1.5 sm:px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1
+              className="truncate text-sm font-medium leading-none text-foreground"
+              title={currentNovel?.title}
+            >
+              {currentNovel?.title ?? '未选择项目'}
+            </h1>
+            <span className="hidden shrink-0 rounded bg-secondary/80 px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground sm:inline">
+              {schemaLabel}
+            </span>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:border-l sm:border-border/40 sm:pl-3">
+
+          <div className="flex shrink-0 items-center gap-1.5">
             {apiConnected && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={saving || !activeEpisode}
-                  onClick={() => void handleSave()}
-                >
-                  {saving ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Save className="h-3.5 w-3.5" />
-                  )}
-                  {saving ? '保存中…' : '保存本集'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={generatingAll || pendingCount === 0}
-                  onClick={() => void generateAllEpisodes()}
-                >
-                  {generatingAll ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" />
-                  )}
-                  {generatingAll
-                    ? '批量生成中…'
-                    : `批量生成${pendingCount ? ` (${pendingCount})` : ''}`}
-                </Button>
-              </>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                disabled={saving || !activeEpisode}
+                onClick={() => void handleSave()}
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">{saving ? '保存中' : '保存'}</span>
+              </Button>
             )}
-            <Button size="sm" onClick={() => setExportDialogOpen(true)}>
-              导出剧本
+            <Button size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setExportDialogOpen(true)}>
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">导出</span>
             </Button>
           </div>
         </div>
-      </div>
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <Canvas />
-        <ChatPanel />
-      </div>
+
+        <div className="editor-episode-rail">
+          <EpisodeList />
+        </div>
+      </header>
+
+      <Canvas />
     </div>
   )
 }

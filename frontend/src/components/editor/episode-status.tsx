@@ -34,13 +34,13 @@ export function EpisodeStatusBadge({ status }: { status: EpisodeStatus }) {
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 text-[10px] font-medium',
+        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border/40 bg-background/50 px-2 py-0.5 text-[10px] font-medium',
         className,
       )}
       title={label}
     >
       {icon}
-      <span className="hidden xl:inline">{label}</span>
+      <span>{label}</span>
     </span>
   )
 }

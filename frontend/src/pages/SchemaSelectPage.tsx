@@ -16,14 +16,15 @@ const schemaIcons: Record<SchemaType, typeof PenLine> = {
 
 export function SchemaSelectPage() {
   const navigate = useNavigate()
-  const { selectedSchema, setSelectedSchema, currentNovel } = useAppStore()
+  const { selectedSchema, setSelectedSchema, switchToSchemaVersion, currentNovel } = useAppStore()
 
-  function handleContinue() {
+  async function handleContinue() {
     if (!selectedSchema) return
     if (selectedSchema === 'overview') {
       navigate('/overview')
       return
     }
+    await switchToSchemaVersion(selectedSchema)
     navigate('/adaptation-plan')
   }
 

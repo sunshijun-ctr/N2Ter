@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,18 @@ from app.tools.base import ToolContext
 from app.tools.registry import tool_registry
 
 _logger = logging.getLogger(__name__)
+
+_PLACEHOLDER_EPISODE_TITLE = re.compile(r"^第 \d+(-\d+)? 章$")
+_LEGACY_EPISODE_SUFFIX = re.compile(r" · 第 \d+ 集$")
+
+
+def _is_placeholder_episode_title(title: str | None, episode_num: int) -> bool:
+    trimmed = (title or "").strip()
+    if not trimmed or trimmed == f"第 {episode_num} 集":
+        return True
+    if _LEGACY_EPISODE_SUFFIX.search(trimmed):
+        return True
+    return bool(_PLACEHOLDER_EPISODE_TITLE.match(trimmed))
 
 _GENERATION_TOOL_ALLOWLIST = {
     "chapter_get",
@@ -74,7 +87,12 @@ class EpisodeWritingAgentService:
         self.scene_concurrency = max(1, settings.episode_scene_concurrency)
 
     async def generate_episode(
-        self, db: AsyncSession, episode: Episode, task: Task | None = None
+        self,
+        db: AsyncSession,
+        episode: Episode,
+        task: Task | None = None,
+        *,
+        instruction: str | None = None,
     ) -> tuple[Episode, Task, dict[str, Any]]:
         screenplay = await db.get(Screenplay, episode.screenplay_id)
         if not screenplay:
@@ -107,7 +125,7 @@ class EpisodeWritingAgentService:
             }
 
         try:
-            result = await self._run_agent(db, screenplay, episode)
+            result = await self._run_agent(db, screenplay, episode, instruction=instruction)
         except Exception as exc:  # noqa: BLE001 - returned as a user-actionable failure
             _logger.warning("EpisodeWritingAgent failed for %s: %s", episode.id, exc)
             episode.status = EpisodeStatus.failed
@@ -132,6 +150,16 @@ class EpisodeWritingAgentService:
             result["episode_content"], screenplay, episode, novel
         )
         episode.content = content
+        generated_title = content.get("title")
+        if isinstance(generated_title, str) and generated_title.strip():
+            if _is_placeholder_episode_title(episode.title, episode.episode_num):
+                # Guarantee uniqueness across the screenplay even if the model
+                # ignored the no-duplicates instruction (e.g. ep6 == ep8).
+                siblings = await self._sibling_titles(db, screenplay.id, episode.id)
+                episode.title = self._dedupe_title(generated_title.strip(), siblings)
+                content["title"] = episode.title
+            else:
+                content["title"] = episode.title.strip()
         episode.status = EpisodeStatus.done
         episode.error_message = None
         episode.generated_at = datetime.now(timezone.utc)
@@ -349,12 +377,26 @@ class EpisodeWritingAgentService:
             pass
 
     async def _run_agent(
-        self, db: AsyncSession, screenplay: Screenplay, episode: Episode
+        self,
+        db: AsyncSession,
+        screenplay: Screenplay,
+        episode: Episode,
+        *,
+        instruction: str | None = None,
     ) -> dict[str, Any]:
         """Generate one episode incrementally: a small outline pass, then one
         retrieval+draft ReAct pass per scene, then assemble. Each LLM call is
         small, so this scales to long episodes and 20+ episode screenplays
-        without ever hitting the model's output ceiling."""
+        without ever hitting the model's output ceiling.
+
+        ``instruction`` (optional) steers a regeneration of this episode, e.g.
+        "把所有角色写得更兴奋"; it's injected into both the outline and scene prompts.
+        """
+        regen_hint = (
+            f"\n【本次为重新生成，请按以下方向重写本集】：{instruction.strip()}"
+            if instruction and instruction.strip()
+            else ""
+        )
         novel = await db.get(Novel, screenplay.novel_id)
         system_prompt = self._build_system_prompt(screenplay)
         schema_type = screenplay.schema_type.value
@@ -383,6 +425,16 @@ class EpisodeWritingAgentService:
             "screenplay_memory": memory,
         }
 
+        # Titles already used by sibling episodes, so this one avoids duplicates.
+        existing_titles = await self._sibling_titles(db, screenplay.id, episode.id)
+        uniq_hint = (
+            "本集标题必须与全剧其它集不同、不得重复；已被占用的标题有："
+            + "、".join(f"《{t}》" for t in existing_titles)
+            + "。"
+            if existing_titles
+            else ""
+        )
+
         # ---- Stage 1: episode outline (small output, no full scene content) ----
         await self._emit_step(
             screenplay, episode, step_index=0, phase="plan",
@@ -391,12 +443,18 @@ class EpisodeWritingAgentService:
         outline_payload = {
             **common,
             "task": "plan_episode_outline",
+            "existing_episode_titles": existing_titles,
             "instruction": (
                 "先用 chapter_get(summary/key_events) 与 chapter_search 研究本集源章节，"
                 "再输出本集场景大纲。只输出大纲，不要写完整场景内容/对白/分镜。"
+                "必须为本集取一个简短有戏剧感的中文标题（4-12 字，概括本集核心冲突或高潮，"
+                "如《新婚之夜》《密谋分赃》），禁止使用「第N集」「第N章」「本集标题」或章节"
+                "区间这类占位文字。"
+                + uniq_hint
+                + regen_hint
             ),
             "output_contract": {
-                "title": "本集标题",
+                "title": "本集中文标题（4-12 字，有戏剧感，不得为占位文字）",
                 "episode_summary": "本集梗概",
                 "key_conflict": "本集核心冲突",
                 "emotional_arc": "本集情感曲线",
@@ -472,6 +530,7 @@ class EpisodeWritingAgentService:
                         "只输出这一个场景对象，严格遵循 schema_definition 中 scenes[] 单个场景的字段"
                         "（逐字段对齐，禁止自创字段名）。不要输出整集，不要输出 scenes 数组。"
                         + roster_hint
+                        + regen_hint
                     ),
                     "output_contract": {
                         "scene": "符合 schema scenes[] 的单个场景对象",
@@ -578,6 +637,38 @@ class EpisodeWritingAgentService:
             for nm in scene.get("characters") or []:
                 _add(str(nm))
         return roster
+
+    @staticmethod
+    async def _sibling_titles(db: AsyncSession, screenplay_id, exclude_episode_id) -> list[str]:
+        """Non-placeholder titles of the other episodes in this screenplay, so a
+        new episode can be told to avoid duplicating them."""
+        rows = await db.execute(
+            select(Episode.title).where(
+                Episode.screenplay_id == screenplay_id,
+                Episode.id != exclude_episode_id,
+            )
+        )
+        titles: list[str] = []
+        for raw in rows.scalars():
+            title = (raw or "").strip()
+            if not title or re.match(r"^第 \d+ 集$", title):
+                continue
+            if _PLACEHOLDER_EPISODE_TITLE.match(title):
+                continue
+            titles.append(title)
+        return titles
+
+    @staticmethod
+    def _dedupe_title(title: str, existing: list[str]) -> str:
+        """Guarantee a unique episode title even if the model ignored the
+        no-duplicates instruction: append an incrementing suffix on collision."""
+        taken = {t.strip() for t in existing}
+        if title not in taken:
+            return title
+        n = 2
+        while f"{title} {n}" in taken:
+            n += 1
+        return f"{title} {n}"
 
     async def _parse_or_retry(
         self, messages: list[dict[str, Any]], content: str, *, attempts: int = 3

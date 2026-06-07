@@ -106,6 +106,67 @@
     background-image: linear-gradient(hsl(150 8% 22% / 0.75) 1px, transparent 1px);
     box-shadow: inset 0 1px 0 hsl(150 8% 22%);
   }
+
+  .editor-toolbar {
+    @apply glass-panel-strong shrink-0 border-b border-border/50;
+  }
+
+  .editor-episode-rail {
+    @apply relative border-t border-border/40 bg-muted/25;
+  }
+
+  .editor-episode-scroll {
+    @apply relative;
+  }
+
+  .editor-episode-scroll.is-scroll-left::before,
+  .editor-episode-scroll.is-scroll-right::after {
+    content: '';
+    @apply pointer-events-none absolute inset-y-0 z-10 w-5;
+  }
+
+  .editor-episode-scroll.is-scroll-left::before {
+    left: 0;
+    background: linear-gradient(to right, hsl(var(--muted) / 0.95), transparent);
+  }
+
+  .editor-episode-scroll.is-scroll-right::after {
+    right: 0;
+    background: linear-gradient(to left, hsl(var(--muted) / 0.95), transparent);
+  }
+
+  .editor-episode-pill {
+    @apply relative flex h-7 min-w-[4.5rem] max-w-[8.5rem] shrink-0 cursor-pointer items-center gap-1 rounded-md border border-transparent px-2 text-left transition-colors duration-200;
+    @apply hover:border-border/50 hover:bg-card/80;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1;
+  }
+
+  .editor-episode-pill[data-active='true'] {
+    @apply border-primary/30 bg-card font-medium shadow-sm ring-1 ring-primary/10;
+  }
+
+  .editor-episode-pill[data-active='true']::before {
+    content: '';
+    @apply absolute bottom-0 left-1.5 right-1.5 h-0.5 rounded-full bg-primary;
+  }
+
+  .editor-episode-header {
+    @apply rounded-xl border border-border/45 bg-card/70 p-4 shadow-soft backdrop-blur-sm sm:p-5;
+  }
+
+  .editor-title-field {
+    @apply w-full rounded-lg border border-border/50 bg-background/80 px-3 py-2 font-display text-xl font-normal leading-tight tracking-tight text-foreground;
+    @apply transition-colors duration-200 placeholder:text-muted-foreground/45;
+    @apply hover:border-border focus:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/15;
+  }
+
+  .editor-empty-panel {
+    @apply rounded-2xl border border-dashed border-border/60 bg-card/40 px-8 py-14 text-center;
+  }
+
+  .editor-progress-panel {
+    @apply rounded-2xl border border-primary/15 bg-gradient-to-br from-accent/30 to-card/50 p-5 shadow-soft;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

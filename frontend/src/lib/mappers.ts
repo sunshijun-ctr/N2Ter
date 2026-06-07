@@ -20,6 +20,7 @@ import {
   resolveCharacterText,
   toCharacterIdForSave,
 } from './character-profiles'
+import { isPlaceholderEpisodeTitle } from './episode-title'
 import type {
   AdaptationPlan,
   AdaptationPlanItem,
@@ -95,7 +96,11 @@ export function mapAdaptationPlan(dto: ApiAdaptationPlanRead, totalChapters?: nu
     episodeNum: ep.episode_num,
     title: ep.title ?? `第 ${ep.episode_num} 集`,
     sourceChapters: ep.source_chapters ?? [],
-    oneLineSummary: ep.one_line_summary,
+    oneLineSummary:
+      ep.one_line_summary ??
+      (typeof (ep as { summary?: string }).summary === 'string'
+        ? (ep as { summary?: string }).summary
+        : undefined),
   }))
   const maxChapter = items.flatMap((i) => i.sourceChapters).reduce((m, n) => Math.max(m, n), 0)
   return {
@@ -121,7 +126,11 @@ export function mapAdaptationPlanFromDict(raw: Record<string, unknown>): Adaptat
       episodeNum: Number(ep.episode_num),
       title: ep.title ?? `第 ${ep.episode_num} 集`,
       sourceChapters: ep.source_chapters ?? [],
-      oneLineSummary: ep.one_line_summary,
+      oneLineSummary:
+        ep.one_line_summary ??
+        (typeof (ep as { summary?: string }).summary === 'string'
+          ? (ep as { summary?: string }).summary
+          : undefined),
     })),
     reasoning: typeof raw.reasoning === 'string' ? raw.reasoning : undefined,
   }
@@ -405,11 +414,21 @@ export function toEpisodeContentPayload(
 }
 
 export function mapEpisode(dto: ApiEpisodeRead): Episode {
+  let title = (dto.title ?? '').trim() || `第 ${dto.episode_num} 集`
+  const contentTitle =
+    dto.content && typeof dto.content.title === 'string' ? dto.content.title.trim() : ''
+  if (
+    contentTitle &&
+    isPlaceholderEpisodeTitle(title, dto.episode_num) &&
+    !isPlaceholderEpisodeTitle(contentTitle, dto.episode_num)
+  ) {
+    title = contentTitle
+  }
   return {
     id: dto.id,
     screenplayId: dto.screenplay_id,
     episodeNum: dto.episode_num,
-    title: dto.title ?? `第 ${dto.episode_num} 集`,
+    title,
     sourceChapters: dto.source_chapters ?? [],
     status: dto.status as EpisodeStatus,
     content: mapEpisodeContent(dto.content ?? null),
@@ -418,18 +437,23 @@ export function mapEpisode(dto: ApiEpisodeRead): Episode {
   }
 }
 
-/** 当 episode.source_chapters 为空时，从改编方案回填 */
+/** 当 episode.source_chapters 为空或标题仍为占位名时，从改编方案回填 */
 export function enrichEpisodesFromPlan(
   episodes: Episode[],
   plan?: AdaptationPlan | null,
 ): Episode[] {
   if (!plan?.items.length) return episodes
   return episodes.map((ep) => {
-    if (ep.sourceChapters.length > 0) return ep
     const item = plan.items.find((i) => i.episodeNum === ep.episodeNum)
-    return item?.sourceChapters.length
-      ? { ...ep, sourceChapters: item.sourceChapters }
-      : ep
+    if (!item) return ep
+    let next = ep
+    if (next.sourceChapters.length === 0 && item.sourceChapters.length > 0) {
+      next = { ...next, sourceChapters: item.sourceChapters }
+    }
+    if (item.title && isPlaceholderEpisodeTitle(next.title, ep.episodeNum)) {
+      next = { ...next, title: item.title }
+    }
+    return next
   })
 }
 
@@ -559,10 +583,11 @@ export function resolveScreenplay(
   session: { screenplayId?: string | null; selectedSchema?: SchemaType | null } | null,
   fallbackSchema?: SchemaType | null,
 ): Screenplay | undefined {
+  const schema = session?.selectedSchema ?? fallbackSchema
   if (session?.screenplayId) {
     const byId = screenplays.find((s) => s.id === session.screenplayId)
-    if (byId) return byId
+    // 仅当 session 中的剧本与当前选中版本一致时才沿用 id，避免切到另一 schema 仍显示旧剧本
+    if (byId && (!schema || byId.schemaType === schema)) return byId
   }
-  const schema = session?.selectedSchema ?? fallbackSchema
   return pickScreenplay(screenplays, schema)
 }

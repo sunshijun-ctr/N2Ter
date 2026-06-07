@@ -1,9 +1,12 @@
+import re
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chapter, Novel
+
+_PSEUDO_CHAPTER = re.compile(r"^第\s*\d+\s*段（自动分章）")
 
 
 class PlanningService:
@@ -36,7 +39,7 @@ class PlanningService:
             episodes.append(
                 {
                     "episode_num": episode_num,
-                    "title": f"第 {episode_num} 集",
+                    "title": self._episode_title(group, episode_num),
                     "source_chapters": source_chapters,
                     "source_chapter_titles": [chapter.title for chapter in group],
                     "summary": self._episode_summary(group),
@@ -62,6 +65,25 @@ class PlanningService:
         if not novel:
             raise LookupError("Novel not found")
         return await self.build_default_plan(db, novel, chapters_per_episode)
+
+    def _episode_title(self, chapters: list[Chapter], episode_num: int) -> str:
+        titles = [ch.title.strip() for ch in chapters if ch.title and ch.title.strip()]
+        meaningful = [t for t in titles if not _PSEUDO_CHAPTER.match(t)]
+        if not meaningful:
+            nums = [ch.chapter_num for ch in chapters]
+            if len(nums) == 1:
+                return f"第 {nums[0]} 章"
+            if len(nums) > 1:
+                return f"第 {nums[0]}-{nums[-1]} 章"
+            return f"第 {episode_num} 集"
+        first = meaningful[0]
+        if len(meaningful) == 1:
+            return first[:60]
+        last = meaningful[-1]
+        if first == last:
+            return first[:60]
+        combined = f"{first} · {last}"
+        return combined[:80] if len(combined) > 80 else combined
 
     def _episode_summary(self, chapters: list[Chapter]) -> str:
         summaries = [chapter.summary for chapter in chapters if chapter.summary]

@@ -29,6 +29,7 @@ import {
   getOverviewScreenplay,
 } from '@/lib/mock'
 import { buildAdaptationPlan } from '@/lib/adaptation'
+import { isPlaceholderEpisodeTitle } from '@/lib/episode-title'
 import { newCanvasId } from '@/lib/utils'
 import {
   clearNovelSession,
@@ -46,6 +47,7 @@ import {
 } from '@/lib/preprocess-stages'
 import {
   resolveScreenplay,
+  pickScreenplay,
   enrichEpisodesFromPlan,
   mapOverviewDocument,
   buildOverviewFallback,
@@ -106,7 +108,7 @@ interface AppState {
   generatingAll: boolean
 
   hydrateFromApi: () => Promise<void>
-  uploadAndPreprocess: (file: File, genres: string[]) => Promise<string | null>
+  uploadAndPreprocess: (file: File, genres: string[], wordsPerChapter?: number) => Promise<string | null>
   refreshNovel: (novelId: string) => Promise<void>
   deleteNovel: (novelId: string) => Promise<boolean>
   startPreprocessWs: () => Promise<void>
@@ -120,7 +122,10 @@ interface AppState {
   setCurrentNovel: (n: Novel | null) => void
   switchNovel: (novelId: string, options?: { quiet?: boolean }) => Promise<void>
   setSelectedSchema: (s: SchemaType | null) => void
+  /** 按 schema 激活对应剧本版本（AI 视频版 / 编剧版各自独立，互不覆盖） */
+  switchToSchemaVersion: (schema?: SchemaType | null) => Promise<void>
   setAdaptationPlan: (p: AdaptationPlan | null) => void
+  updateAdaptationPlanItemTitle: (episodeNum: number, title: string) => void
   confirmPlan: () => Promise<void>
   resetPlanFlow: () => void
   fetchAdaptationPlan: (chaptersPerEpisode?: number) => Promise<void>
@@ -140,6 +145,9 @@ interface AppState {
     patch: Partial<SceneDialogue>,
   ) => void
   updateEpisodeContent: (episodeId: string, content: EpisodeContent) => void
+  updateEpisodeTitle: (episodeId: string, title: string) => void
+  saveEpisodeTitle: (episodeId: string) => Promise<void>
+  syncEpisodeTitlesFromPlan: (plan: AdaptationPlan, episodes: Episode[]) => Promise<Episode[]>
   addScene: (episodeId: string) => void
   removeScene: (episodeId: string, sceneId: string) => void
   addDialogue: (episodeId: string, sceneId: string) => void
@@ -167,7 +175,7 @@ interface AppState {
     dialogueId: string,
   ) => void
   saveActiveEpisode: () => Promise<void>
-  generateEpisode: (episodeId: string) => Promise<void>
+  generateEpisode: (episodeId: string, instruction?: string) => Promise<void>
   resetEpisode: (episodeId: string) => Promise<void>
   generateAllEpisodes: () => Promise<void>
 
@@ -274,12 +282,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  uploadAndPreprocess: async (file, genres) => {
+  uploadAndPreprocess: async (file, genres, wordsPerChapter = 0) => {
     set({ globalLoading: true, globalError: null })
     try {
       const content = await file.text()
       const title = file.name.replace(/\.(txt|docx)$/i, '') || '未命名小说'
-      const novel = await api.novels.create({ title, content, genres })
+      const novel = await api.novels.create({
+        title,
+        content,
+        genres,
+        words_per_chapter: wordsPerChapter,
+      })
       set((state) => ({
         apiConnected: true,
         novels: [novel, ...state.novels.filter((n) => n.id !== novel.id)],
@@ -287,6 +300,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentScreenplay: null,
         activeEpisodeId: null,
         planConfirmed: false,
+        adaptationPlan: buildAdaptationPlan(
+          novel.wordCount ? Math.ceil(novel.wordCount / 9000) : 80,
+          36,
+        ),
         preprocessStages: initialPreprocessStages(),
         preprocessDetail: '已上传，启动预处理…',
         preprocessStageDetails: {},
@@ -294,6 +311,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         preprocessChapterProgress: null,
         preprocessDone: false,
       }))
+      saveNovelSession(novel.id, {
+        selectedSchema: null,
+        screenplayId: null,
+        activeEpisodeId: null,
+        planConfirmed: false,
+      })
+      setLastNovelId(novel.id)
       await api.novels.preprocess(novel.id)
       set((state) => ({
         currentNovel: state.currentNovel
@@ -554,7 +578,6 @@ export const useAppStore = create<AppState>((set, get) => ({
             plan = buildAdaptationPlan(
               novel.wordCount ? Math.ceil(novel.wordCount / 9000) : 80,
               36,
-              novel.title,
             )
           }
         }
@@ -612,7 +635,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedSchema: restoredSchema,
         planConfirmed: session?.planConfirmed ?? Boolean(screenplay),
         activeEpisodeId,
-        adaptationPlan: buildAdaptationPlan(chapters, Math.min(36, chapters), novel.title),
+        adaptationPlan: buildAdaptationPlan(chapters, Math.min(36, chapters)),
         globalLoading: false,
       })
       saveNovelSession(novelId, {
@@ -632,8 +655,86 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ selectedSchema: s })
     const novel = get().currentNovel
     if (novel) saveNovelSession(novel.id, { selectedSchema: s })
+    if (s && s !== 'overview') {
+      void get().switchToSchemaVersion(s)
+    }
+  },
+
+  switchToSchemaVersion: async (schemaOverride) => {
+    const schema = schemaOverride ?? get().selectedSchema
+    const novel = get().currentNovel
+    if (!novel || !schema || schema === 'overview') return
+
+    const prevEpisodeNum = get().getActiveEpisode()?.episodeNum
+
+    const applyScreenplay = (
+      screenplay: Screenplay | null,
+      episodes: Episode[],
+      planConfirmed: boolean,
+    ) => {
+      const activeEpisodeId =
+        (prevEpisodeNum != null
+          ? episodes.find((e) => e.episodeNum === prevEpisodeNum)?.id
+          : undefined) ??
+        episodes[0]?.id ??
+        null
+      set((state) => ({
+        currentScreenplay: screenplay,
+        selectedSchema: schema,
+        adaptationPlan: screenplay?.adaptationPlan ?? state.adaptationPlan,
+        planConfirmed,
+        activeEpisodeId,
+        episodesByScreenplay: screenplay
+          ? { ...state.episodesByScreenplay, [screenplay.id]: episodes }
+          : state.episodesByScreenplay,
+      }))
+      saveNovelSession(novel.id, {
+        selectedSchema: schema,
+        screenplayId: screenplay?.id ?? null,
+        activeEpisodeId,
+        planConfirmed,
+      })
+    }
+
+    if (get().apiConnected) {
+      try {
+        const screenplays = await api.screenplays.listByNovel(novel.id)
+        const screenplay = pickScreenplay(screenplays, schema) ?? null
+        if (!screenplay) {
+          applyScreenplay(null, [], false)
+          return
+        }
+        let episodes = await api.episodes.list(screenplay.id)
+        episodes = enrichEpisodesFromPlan(
+          episodes,
+          screenplay.adaptationPlan ?? get().adaptationPlan,
+        )
+        applyScreenplay(screenplay, episodes, true)
+      } catch (e) {
+        set({ globalError: e instanceof ApiError ? e.message : '切换版本失败' })
+      }
+      return
+    }
+
+    const novelScreenplays = mockScreenplays.filter((s) => s.novelId === novel.id)
+    const screenplay = pickScreenplay(novelScreenplays, schema) ?? null
+    const episodes = screenplay ? get().episodesByScreenplay[screenplay.id] ?? [] : []
+    applyScreenplay(screenplay, episodes, Boolean(screenplay))
   },
   setAdaptationPlan: (p) => set({ adaptationPlan: p, planConfirmed: false }),
+  updateAdaptationPlanItemTitle: (episodeNum, title) =>
+    set((state) => {
+      if (!state.adaptationPlan) return state
+      return {
+        adaptationPlan: {
+          ...state.adaptationPlan,
+          items: state.adaptationPlan.items.map((item) =>
+            item.episodeNum === episodeNum ? { ...item, title } : item,
+          ),
+        },
+        planConfirmed: false,
+      }
+    }),
   confirmPlan: async () => {
     const { currentNovel, selectedSchema, adaptationPlan, apiConnected } = get()
     if (!selectedSchema || selectedSchema === 'overview') {
@@ -663,11 +764,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           title: `${currentNovel.title} · 剧本`,
           adaptationPlan: payload,
         }))
-      const planResolved = screenplay.adaptationPlan ?? adaptationPlan
-      const episodes = enrichEpisodesFromPlan(
-        await api.episodes.list(screenplay.id),
-        planResolved,
-      )
+      const planResolved = adaptationPlan ?? screenplay.adaptationPlan
+      const rawEpisodes = await api.episodes.list(screenplay.id)
+      const syncedEpisodes = await get().syncEpisodeTitlesFromPlan(planResolved, rawEpisodes)
+      const episodes = enrichEpisodesFromPlan(syncedEpisodes, planResolved)
       set((state) => ({
         planConfirmed: true,
         currentScreenplay: screenplay,
@@ -699,18 +799,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (novel) clearNovelSession(novel.id)
     set({
       selectedSchema: null,
-      adaptationPlan: novel
-        ? buildAdaptationPlan(80, 36, novel.title)
-        : mockAdaptationPlan,
+      adaptationPlan: novel ? buildAdaptationPlan(80, 36) : mockAdaptationPlan,
       planConfirmed: false,
     })
   },
 
   fetchAdaptationPlan: async (chaptersPerEpisode = 2) => {
-    const novel = get().currentNovel
+    const { currentNovel: novel, selectedSchema, currentScreenplay } = get()
     if (!novel) return
+    if (
+      currentScreenplay?.schemaType === selectedSchema &&
+      currentScreenplay.adaptationPlan
+    ) {
+      set({ adaptationPlan: currentScreenplay.adaptationPlan })
+      return
+    }
     if (get().apiConnected) {
       try {
+        const screenplays = await api.screenplays.listByNovel(novel.id)
+        const existing = pickScreenplay(screenplays, selectedSchema)
+        if (existing?.adaptationPlan) {
+          set({ adaptationPlan: existing.adaptationPlan })
+          return
+        }
         const plan = await api.novels.adaptationPlan(novel.id, { chapters_per_episode: chaptersPerEpisode })
         set({ adaptationPlan: plan })
         return
@@ -720,7 +831,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const chapters = novel.wordCount ? Math.ceil(novel.wordCount / 9000) : 80
     const epCount = Math.max(1, Math.ceil(chapters / chaptersPerEpisode))
-    set({ adaptationPlan: buildAdaptationPlan(chapters, epCount, novel.title) })
+    set({ adaptationPlan: buildAdaptationPlan(chapters, epCount) })
   },
 
   loadOverview: async () => {
@@ -770,6 +881,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setActiveEpisode: (id) => {
+    const prev = get().getActiveEpisode()
+    if (prev && prev.id !== id && get().apiConnected) {
+      void get().saveEpisodeTitle(prev.id)
+    }
     set({ activeEpisodeId: id })
     const novel = get().currentNovel
     if (novel) saveNovelSession(novel.id, { activeEpisodeId: id })
@@ -849,6 +964,56 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({ ...ep, content })),
       }
     })
+  },
+
+  updateEpisodeTitle: (episodeId, title) => {
+    set((state) => {
+      const screenplayId = state.currentScreenplay?.id
+      if (!screenplayId) return state
+      return {
+        ...state,
+        ...patchEpisodes(state, screenplayId, episodeId, (ep) => ({ ...ep, title })),
+      }
+    })
+  },
+
+  saveEpisodeTitle: async (episodeId) => {
+    const screenplayId = get().currentScreenplay?.id
+    if (!screenplayId || !get().apiConnected) return
+    const episode = (get().episodesByScreenplay[screenplayId] ?? []).find((e) => e.id === episodeId)
+    if (!episode?.title.trim()) return
+    try {
+      const updated = await api.episodes.update(episodeId, { title: episode.title.trim() })
+      set((state) => ({
+        episodesByScreenplay: {
+          ...state.episodesByScreenplay,
+          [screenplayId]: (state.episodesByScreenplay[screenplayId] ?? []).map((e) =>
+            e.id === updated.id ? updated : e,
+          ),
+        },
+      }))
+    } catch (e) {
+      set({ globalError: e instanceof ApiError ? e.message : '保存集名称失败' })
+    }
+  },
+
+  syncEpisodeTitlesFromPlan: async (plan, episodes) => {
+    if (!get().apiConnected) return enrichEpisodesFromPlan(episodes, plan)
+    const synced = await Promise.all(
+      episodes.map(async (ep) => {
+        const item = plan.items.find((i) => i.episodeNum === ep.episodeNum)
+        const target = item?.title?.trim()
+        if (!target || ep.title === target) return ep
+        // 仅同步占位集名，避免覆盖用户在编辑器里自定义的名称
+        if (!isPlaceholderEpisodeTitle(ep.title, ep.episodeNum)) return ep
+        try {
+          return await api.episodes.update(ep.id, { title: target })
+        } catch {
+          return { ...ep, title: target }
+        }
+      }),
+    )
+    return synced
   },
 
   addScene: (episodeId) => {
@@ -1113,7 +1278,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!episode || !get().apiConnected) return
     try {
       const payload = toEpisodeContentPayload(episode.content)
-      const updated = await api.episodes.update(episode.id, { content: payload })
+      payload.title = episode.title
+      const updated = await api.episodes.update(episode.id, {
+        title: episode.title,
+        content: payload,
+      })
       const screenplayId = get().currentScreenplay?.id
       if (screenplayId) {
         set((state) => ({
@@ -1141,7 +1310,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  generateEpisode: async (episodeId) => {
+  generateEpisode: async (episodeId, instruction) => {
     const screenplayId = get().currentScreenplay?.id
     if (!screenplayId || !get().apiConnected) return
     // Skip if this episode is already being generated (avoids a double request
@@ -1226,7 +1395,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
     }
     try {
-      await api.episodes.generate(episodeId)
+      await api.episodes.generate(episodeId, instruction)
       // Backend may run generation async (Celery) or inline; poll the episode
       // until it leaves the `generating` state, then store the final content.
       const deadline = Date.now() + 5 * 60 * 1000
@@ -1412,12 +1581,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
     }
 
-    chatWsConn?.close()
-    chatWsConn = connectConversationWs(convId, {
-      onMessage: (msg) => get().handleChatWsMessage(msg),
-      onOpen: () => set({ chatReady: true }),
-      onClose: () => set({ chatReady: false }),
-    })
+    // 复用已建立的连接，避免每条消息都重连（重连会赶上「未 open」竞态、
+    // 还会打断正在返回的回复）。只有当前没有连接时才新建。
+    if (!chatWsConn) {
+      chatWsConn = connectConversationWs(convId, {
+        onMessage: (msg) => get().handleChatWsMessage(msg),
+        onOpen: () => set({ chatReady: true }),
+        onClose: () => {
+          chatWsConn = null
+          set({ chatReady: false })
+        },
+      })
+    }
   },
 
   disconnectChat: () => {

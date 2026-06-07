@@ -142,7 +142,9 @@ def preprocess_novel(novel_id: str, task_id: str | None = None) -> dict:
 
 
 @celery_app.task(name="generate_episode")
-def generate_episode(episode_id: str, task_id: str | None = None) -> dict:
+def generate_episode(
+    episode_id: str, task_id: str | None = None, instruction: str | None = None
+) -> dict:
     async def _work(db: AsyncSession) -> dict:
         episode = await db.get(Episode, UUID(episode_id))
         if not episode:
@@ -152,7 +154,7 @@ def generate_episode(episode_id: str, task_id: str | None = None) -> dict:
         )
         try:
             generated, task, _ = await episode_writing_agent_service.generate_episode(
-                db, episode, task
+                db, episode, task, instruction=instruction
             )
         except Exception as exc:  # noqa: BLE001 - surface failure to the user
             task.status = TaskStatus.failed

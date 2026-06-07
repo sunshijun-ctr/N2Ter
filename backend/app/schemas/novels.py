@@ -11,6 +11,7 @@ class NovelCreate(BaseModel):
     author: str | None = None
     content: str = Field(min_length=1)
     genres: list[str] = Field(default_factory=list, max_length=3)
+    words_per_chapter: int = Field(default=5000, ge=0, le=15000)
 
 
 class NovelRead(Timestamped):

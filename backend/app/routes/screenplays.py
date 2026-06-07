@@ -19,6 +19,7 @@ from app.models import (
 from app.schemas import (
     AdaptationPlanRead,
     AdaptationPlanRequest,
+    EpisodeGenerateRequest,
     EpisodePatchRequest,
     EpisodeTaskRef,
     EpisodeRead,
@@ -195,10 +196,15 @@ async def get_episode(episode_id: UUID, db: AsyncSession = Depends(get_db)) -> E
 
 
 @router.post("/episodes/{episode_id}/generate", response_model=EpisodeTaskRef)
-async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db)) -> EpisodeTaskRef:
+async def generate_episode(
+    episode_id: UUID,
+    payload: EpisodeGenerateRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> EpisodeTaskRef:
     episode = await db.get(Episode, episode_id)
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
+    instruction = (payload.instruction if payload else None) or None
 
     if get_settings().async_tasks_enabled:
         task = await task_service.create_task(
@@ -212,7 +218,9 @@ async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db))
         await db.refresh(task)
         from app.workers.tasks import generate_episode as generate_episode_task
 
-        async_result = generate_episode_task.delay(str(episode_id), str(task.id))
+        async_result = generate_episode_task.delay(
+            str(episode_id), str(task.id), instruction
+        )
         task.celery_id = async_result.id
         await db.commit()
         await db.refresh(task)
@@ -221,7 +229,9 @@ async def generate_episode(episode_id: UUID, db: AsyncSession = Depends(get_db))
         )
 
     try:
-        generated_episode, task, _ = await episode_writing_agent_service.generate_episode(db, episode)
+        generated_episode, task, _ = await episode_writing_agent_service.generate_episode(
+            db, episode, instruction=instruction
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     return EpisodeTaskRef(

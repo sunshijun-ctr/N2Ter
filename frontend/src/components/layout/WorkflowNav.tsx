@@ -59,13 +59,17 @@ export function WorkflowNav() {
   const activeIndex = getWorkflowActiveIndex(pathname)
   const maxReachable = useMaxReachableStep()
   const selectedSchema = useAppStore((s) => s.selectedSchema)
+  const compact = pathname === '/editor'
 
   if (activeIndex < 0) return null
 
   return (
     <nav
       aria-label="改编流程"
-      className="glass-panel shrink-0 border-b border-border/40 px-4 py-2.5 sm:px-6"
+      className={cn(
+        'glass-panel shrink-0 border-b border-border/40 px-3 sm:px-4',
+        compact ? 'py-1' : 'py-2.5 sm:px-6',
+      )}
     >
       <div className="mx-auto flex w-full max-w-5xl justify-center overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <ol className="inline-flex min-w-min items-center gap-0.5">
@@ -77,7 +81,8 @@ export function WorkflowNav() {
             'detailedOnly' in step && step.detailedOnly && selectedSchema === 'overview' && i <= maxReachable
 
           const pillClass = cn(
-            'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors duration-200',
+            'inline-flex items-center gap-1 rounded-md transition-colors duration-200',
+            compact ? 'px-1.5 py-0.5 text-[11px]' : 'gap-1.5 rounded-lg px-2.5 py-1.5 text-xs',
             state === 'current' && 'bg-primary/10 font-semibold text-primary',
             state === 'done' && reachable && 'text-foreground/85 hover:bg-accent/50',
             state === 'done' && !reachable && 'text-muted-foreground/50',
@@ -96,7 +101,7 @@ export function WorkflowNav() {
               )}
               {reachable && i !== activeIndex ? (
                 <Link to={step.path} className={cn(pillClass, 'cursor-pointer')}>
-                  <StepBadge index={i} state={state} />
+                  <StepBadge index={i} state={state} compact={compact} />
                   <span>{step.label}</span>
                 </Link>
               ) : (
@@ -104,7 +109,7 @@ export function WorkflowNav() {
                   className={pillClass}
                   aria-current={state === 'current' ? 'step' : undefined}
                 >
-                  <StepBadge index={i} state={state} />
+                  <StepBadge index={i} state={state} compact={compact} />
                   <span>{step.label}</span>
                 </span>
               )}
@@ -117,18 +122,34 @@ export function WorkflowNav() {
   )
 }
 
-function StepBadge({ index, state }: { index: number; state: 'done' | 'current' | 'upcoming' }) {
+function StepBadge({
+  index,
+  state,
+  compact = false,
+}: {
+  index: number
+  state: 'done' | 'current' | 'upcoming'
+  compact?: boolean
+}) {
+  const size = compact ? 'h-4 w-4' : 'h-5 w-5'
   if (state === 'done') {
     return (
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-        <Check className="h-3 w-3" strokeWidth={2.5} />
+      <span
+        className={cn(
+          'flex shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary',
+          size,
+        )}
+      >
+        <Check className={cn(compact ? 'h-2.5 w-2.5' : 'h-3 w-3')} strokeWidth={2.5} />
       </span>
     )
   }
   return (
     <span
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums',
+        'flex shrink-0 items-center justify-center rounded-full font-semibold tabular-nums',
+        size,
+        compact ? 'text-[9px]' : 'text-[10px]',
         state === 'current'
           ? 'bg-primary text-primary-foreground'
           : 'bg-muted text-muted-foreground',

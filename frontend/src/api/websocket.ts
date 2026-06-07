@@ -36,8 +36,14 @@ function parseServerMessage(raw: unknown): WsServerMessage {
 
 export function connectConversationWs(convId: string, handlers: WsHandlers) {
   const ws = new WebSocket(wsUrl(`/ws/conversations/${convId}`))
+  // 建连是异步的：在 OPEN 之前 send 会被丢弃。缓冲这些消息，open 后补发，
+  // 否则用户发的第一条（建连未完成时）会石沉大海，agent 永不回复。
+  const pending: WsClientMessage[] = []
 
-  ws.onopen = () => handlers.onOpen?.()
+  ws.onopen = () => {
+    handlers.onOpen?.()
+    while (pending.length) ws.send(JSON.stringify(pending.shift()))
+  }
   ws.onclose = () => handlers.onClose?.()
   ws.onerror = (e) => handlers.onError?.(e)
   ws.onmessage = (ev) => {
@@ -51,6 +57,8 @@ export function connectConversationWs(convId: string, handlers: WsHandlers) {
   return {
     send: (msg: WsClientMessage) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
+      else if (ws.readyState === WebSocket.CONNECTING) pending.push(msg)
+      // CLOSING/CLOSED: drop (caller will reconnect on next send)
     },
     close: () => ws.close(),
   }

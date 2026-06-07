@@ -17,6 +17,8 @@ import { DialogueLine } from '@/components/ui/dialogue-line'
 import { useAppStore } from '@/stores/useAppStore'
 import type { AgentStep, Scene, Shot } from '@/lib/types'
 import { cn, formatSourceChapters } from '@/lib/utils'
+import { RegenerateButton } from './RegenerateButton'
+import { EpisodeStatusBadge } from './episode-status'
 
 const labelClass = 'text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80'
 
@@ -383,7 +385,7 @@ function ShotSceneEditor({
   const shots = scene.shots ?? []
 
   return (
-    <section className="rounded-xl border border-border/40 bg-background/60 p-5 shadow-sm">
+    <section className="rounded-2xl border border-border/35 bg-card/75 p-5 shadow-soft backdrop-blur-sm">
       <div className="mb-4 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <Clapperboard className="h-4 w-4 shrink-0 text-primary/80" />
@@ -464,7 +466,7 @@ function SceneEditor({
     useAppStore()
 
   return (
-    <section className="rounded-xl border border-border/40 bg-background/60 p-5 shadow-sm">
+    <section className="rounded-2xl border border-border/35 bg-card/75 p-5 shadow-soft backdrop-blur-sm">
       <div className="mb-4 flex items-center justify-between gap-2">
         <span className="font-manuscript text-base font-semibold tracking-tight text-foreground">
           场景 {index + 1}
@@ -623,7 +625,7 @@ function GenerationProgress({
   const researchOnly = draftScenes.length === 0 && steps.some((s) => s.phase === 'research')
 
   return (
-    <div className="rounded-lg border border-dashed border-border/60 p-5">
+    <div className="editor-progress-panel">
       <div className="mb-3 flex items-center justify-between gap-2 text-sm font-medium text-foreground">
         <span className="flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
@@ -671,10 +673,13 @@ function GenerationProgress({
 export function Canvas() {
   const {
     getActiveEpisode,
+    getEpisodes,
     getEpisodeBlocker,
     addScene,
     generateEpisode,
     resetEpisode,
+    updateEpisodeTitle,
+    saveEpisodeTitle,
     apiConnected,
     selectedSchema,
     currentScreenplay,
@@ -684,9 +689,16 @@ export function Canvas() {
 
   if (!episode) {
     return (
-      <div className="manuscript-surface flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <p className="font-manuscript text-base text-muted-foreground">请选择上方分集开始编辑</p>
-        <p className="mt-1 text-xs text-muted-foreground/80">画布内容会随分集切换自动保存到本地会话</p>
+      <div className="manuscript-surface flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
+        <div className="editor-empty-panel max-w-md">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
+            <Clapperboard className="h-7 w-7 text-primary" />
+          </div>
+          <p className="font-display text-lg text-foreground">选择一集开始编辑</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            在上方分集栏点选某一集，即可查看或编辑剧本内容、为本集命名。
+          </p>
+        </div>
       </div>
     )
   }
@@ -698,23 +710,61 @@ export function Canvas() {
   const isAiVideo =
     selectedSchema === 'ai_video' || currentScreenplay?.schemaType === 'ai_video'
 
+  // 只有「已生成的最新一集」可以重新生成（更早的集会影响后文连续性，只允许手动微调）。
+  const frontierDoneNum = getEpisodes()
+    .filter((e) => e.status === 'done')
+    .reduce((max, e) => Math.max(max, e.episodeNum), 0)
+  const canRegenerate =
+    apiConnected && episode.status === 'done' && episode.episodeNum === frontierDoneNum
+
   return (
     <div className="manuscript-surface relative min-h-0 min-w-0 flex-1 overflow-auto">
-      <div className="mx-auto w-full max-w-manuscript px-6 py-8 sm:px-10">
-        <header className="mb-8 border-b border-border/50 pb-5">
-          <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-            第 {episode.episodeNum} 集
-          </p>
-          <h2 className="mt-1 font-display text-2xl font-normal leading-tight tracking-tight">
-            {episode.title}
-          </h2>
-          {chapterLabel && (
-            <p className="mt-2 text-xs text-muted-foreground">源章节 · {chapterLabel}</p>
-          )}
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground/85">
+      <div className="mx-auto w-full max-w-manuscript px-4 py-4 sm:px-8 sm:py-5">
+        <header className="editor-episode-header mb-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">
+                  第 {episode.episodeNum} 集
+                </span>
+                <EpisodeStatusBadge status={episode.status} />
+                {chapterLabel ? (
+                  <span className="rounded-full border border-border/50 bg-background/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+                    源章节 · {chapterLabel}
+                  </span>
+                ) : null}
+              </div>
+
+              <label className="block">
+                <span className={labelClass}>集名称</span>
+                <input
+                  type="text"
+                  value={episode.title}
+                  onChange={(e) => updateEpisodeTitle(episode.id, e.target.value)}
+                  onBlur={() => void saveEpisodeTitle(episode.id)}
+                  placeholder="为本集取个名字，如：奇遇初现"
+                  aria-label="本集名称"
+                  className="editor-title-field mt-2"
+                />
+              </label>
+            </div>
+
+            {canRegenerate ? (
+              <div className="shrink-0 sm:pt-8">
+                <RegenerateButton
+                  episodeId={episode.id}
+                  episodeNum={episode.episodeNum}
+                  episodeTitle={episode.title}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <p className="mt-3 border-t border-border/40 pt-2 text-[11px] leading-relaxed text-muted-foreground">
             {isAiVideo
-              ? '编辑分镜、对白与 generation_prompt · 保存后写入本集 JSON'
-              : '场景与对白可直接编辑 · 作业本横线分隔每句对白'}
+              ? '编辑集名称与分镜、对白 · 名称失焦或切换分集时自动保存'
+              : '编辑集名称、场景与对白 · 名称失焦或切换分集时自动保存'}
+            {apiConnected ? ' · 场景内容请点右上角「保存本集」' : null}
           </p>
         </header>
 
@@ -726,20 +776,29 @@ export function Canvas() {
               onReset={() => void resetEpisode(episode.id)}
             />
           ) : scenes.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-12 text-center text-sm text-muted-foreground">
-              <span>{episode.status === 'failed' ? '本集生成失败' : '本集暂无内容'}</span>
+            <div className="editor-empty-panel">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-muted/80">
+                {episode.status === 'failed' ? (
+                  <X className="h-5 w-5 text-destructive" />
+                ) : (
+                  <Sparkles className="h-5 w-5 text-primary" />
+                )}
+              </div>
+              <p className="text-sm font-medium text-foreground">
+                {episode.status === 'failed' ? '本集生成失败' : '本集暂无内容'}
+              </p>
               {episode.status === 'failed' && episode.errorMessage && (
-                <span className="max-w-md text-xs text-muted-foreground/80">
+                <p className="mx-auto mt-2 max-w-md text-xs leading-relaxed text-muted-foreground">
                   {episode.errorMessage}
-                </span>
+                </p>
               )}
               {apiConnected &&
                 (blockerNum !== null ? (
-                  <span className="text-xs text-muted-foreground">
+                  <p className="mt-3 text-xs text-muted-foreground">
                     需先完成第 {blockerNum} 集（剧集按顺序依赖前文生成）
-                  </span>
+                  </p>
                 ) : (
-                  <div className="flex items-center gap-2">
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                     <Button size="sm" onClick={() => void generateEpisode(episode.id)}>
                       <Sparkles className="h-4 w-4" />
                       {episode.status === 'failed' ? '重新生成本集' : 'AI 生成本集'}

@@ -38,7 +38,7 @@ export const SCHEMA_OPTIONS: SchemaOption[] = [
   },
 ]
 
-export const mockAdaptationPlan = buildAdaptationPlan(80, 36, '红楼梦')
+export const mockAdaptationPlan = buildAdaptationPlan(80, 36)
 
 export const mockMessages: ChatMessage[] = [
   { id: 'm1', role: 'user', content: '把第 2 集的对白整体调温柔一点' },

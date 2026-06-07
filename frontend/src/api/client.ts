@@ -164,8 +164,11 @@ export const api = {
       })
       return mapEpisode(data)
     },
-    generate: async (id: string): Promise<ApiTaskRef> =>
-      request<ApiTaskRef>(`/episodes/${id}/generate`, { method: 'POST' }),
+    generate: async (id: string, instruction?: string): Promise<ApiTaskRef> =>
+      request<ApiTaskRef>(`/episodes/${id}/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ instruction: instruction ?? null }),
+      }),
     reset: async (id: string): Promise<Episode> => {
       const data = await request<ApiEpisodeRead>(`/episodes/${id}/reset`, { method: 'POST' })
       return mapEpisode(data)
