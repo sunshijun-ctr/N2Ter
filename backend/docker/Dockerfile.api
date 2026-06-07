@@ -13,7 +13,8 @@ WORKDIR /app
 
 # Install dependencies first (cached layer): only pyproject is needed.
 COPY backend/pyproject.toml ./backend/pyproject.toml
-RUN pip install --no-cache-dir "./backend[pdf,vector]"
+RUN pip install --no-cache-dir "./backend[pdf,vector]" \
+    && python -c "import docx; import weasyprint"
 
 # App code + the DDL the initial Alembic migration replays (repo-root/db)
 # + the prompt templates and Schema definitions loaded at runtime.

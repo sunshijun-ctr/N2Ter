@@ -6,8 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exporters.pdf_exporter import pdf_exporter
+from app.exporters.word_exporter import word_exporter
 from app.exporters.yaml_exporter import YAMLExporter
-from app.models import Episode, Export, ExportFormat, ExportStatus, Screenplay
+from app.models import Episode, Export, ExportFormat, ExportStatus, Novel, Screenplay
+from app.services.character_profile_utils import ensure_character_profiles
+from app.services.export_filename import export_basename
 from app.services.storage_service import storage_service
 
 
@@ -93,18 +96,45 @@ class ExportService:
                     "PDF export requires WeasyPrint native libraries; they are not available."
                 )
             return storage_service.write_bytes(f"{base}.pdf", pdf_exporter.render_pdf(payload))
+        if export_format == ExportFormat.docx:
+            try:
+                data = word_exporter.render_docx(payload)
+            except ImportError as exc:
+                import sys
+
+                raise RuntimeError(
+                    "Word 导出需要 python-docx。"
+                    f"请在当前运行环境安装并重启服务："
+                    f"{sys.executable} -m pip install python-docx"
+                    "（Docker 部署请执行 docker compose up --build）"
+                ) from exc
+            return storage_service.write_bytes(f"{base}.docx", data)
         if export_format == ExportFormat.zip:
             return storage_service.write_bytes(f"{base}.zip", self._build_zip(payload))
         raise RuntimeError(f"Unsupported export format: {export_format}")
 
     def _build_zip(self, payload: dict) -> bytes:
+        basename = export_basename(
+            payload.get("novel_title") or payload.get("title"),
+        )
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("screenplay.yaml", YAMLExporter().render(payload))
+            archive.writestr(f"{basename}.yaml", YAMLExporter().render(payload))
             if pdf_exporter.available():
                 try:
-                    archive.writestr("screenplay.pdf", pdf_exporter.render_pdf(payload))
+                    archive.writestr(
+                        f"{basename}.pdf",
+                        pdf_exporter.render_pdf(payload),
+                    )
                 except Exception:  # noqa: BLE001 - PDF is best-effort in the bundle
+                    pass
+            if word_exporter.available():
+                try:
+                    archive.writestr(
+                        f"{basename}.docx",
+                        word_exporter.render_docx(payload),
+                    )
+                except Exception:  # noqa: BLE001 - Word is best-effort in the bundle
                     pass
         return buffer.getvalue()
 
@@ -115,25 +145,49 @@ class ExportService:
             .order_by(Episode.episode_num.asc())
         )
         episodes = list(result.scalars())
-        return {
-            "screenplay_id": str(screenplay.id),
-            "novel_id": str(screenplay.novel_id),
-            "schema_type": screenplay.schema_type.value,
-            "schema_version": screenplay.schema_version,
-            "title": screenplay.title,
-            "adaptation_plan": screenplay.adaptation_plan or {},
-            "episodes": [
+        novel = await db.get(Novel, screenplay.novel_id)
+        character_arcs = (novel.character_arcs if novel else None) or []
+        novel_title = (novel.title if novel else None) or ""
+
+        episode_payloads = []
+        for episode in episodes:
+            content = dict(episode.content or {})
+            if screenplay.schema_type.value == "ai_video":
+                content = ensure_character_profiles(content, character_arcs)
+            episode_payloads.append(
                 {
                     "episode_id": str(episode.id),
                     "episode_number": episode.episode_num,
                     "title": episode.title,
                     "source_chapters": episode.source_chapters,
                     "status": episode.status.value,
-                    "content": episode.content or {},
+                    "content": content,
                 }
-                for episode in episodes
-            ],
+            )
+
+        return {
+            "screenplay_id": str(screenplay.id),
+            "novel_id": str(screenplay.novel_id),
+            "schema_type": screenplay.schema_type.value,
+            "schema_version": screenplay.schema_version,
+            "title": novel_title or screenplay.title or "剧本",
+            "novel_title": novel_title,
+            "adaptation_plan": screenplay.adaptation_plan or {},
+            "character_arcs": character_arcs,
+            "episodes": episode_payloads,
         }
+
+    async def download_filename(self, db: AsyncSession, export: Export) -> str:
+        """User-facing download name: «上传小说名».ext"""
+        if not export.file_url:
+            return "screenplay"
+        suffix = storage_service.resolve(export.file_url).suffix
+        screenplay = await db.get(Screenplay, export.screenplay_id)
+        if not screenplay:
+            return f"screenplay{suffix}"
+        novel = await db.get(Novel, screenplay.novel_id)
+        basename = export_basename(novel.title if novel else screenplay.title)
+        return f"{basename}{suffix}"
 
     async def get_export(self, db: AsyncSession, export_id: UUID) -> Export:
         export = await db.get(Export, export_id)

@@ -415,10 +415,65 @@ def test_pdf_render_html_ai_video_nested_shots() -> None:
     html = pdf_exporter.render_html(payload)
     assert "AI 视频测试" in html
     assert "内景 · 咖啡馆" in html
+    assert "第 1 集 · 场景 1 · 镜头 1" in html
+    assert "ep1_sc1_sh1" not in html
     assert "推近" in html
     assert "generation_prompt" not in html  # label is 生成提示, not raw key
     assert "A medium shot of a woman stirring coffee" in html
     assert "这位置有人。" in html
+
+
+def test_pdf_render_html_ai_video_resolves_character_ids() -> None:
+    from app.exporters.pdf_exporter import pdf_exporter
+
+    payload = {
+        "schema_type": "ai_video",
+        "title": "角色解析",
+        "character_arcs": [
+            {"name": "林晚"},
+            {"name": "沈云洲"},
+        ],
+        "episodes": [
+            {
+                "episode_number": 2,
+                "content": {
+                    "episode_number": 2,
+                    "title": "试探",
+                    "scenes": [
+                        {
+                            "location": "内景 · 办公室",
+                            "shots": [
+                                {
+                                    "shot_id": "ep2_sc1_sh1",
+                                    "subject": "char_02",
+                                    "subject_action": "整理文件",
+                                    "dialogue": [
+                                        {
+                                            "character_id": "char_01",
+                                            "line": "你来了。",
+                                        }
+                                    ],
+                                    "character_emotion": [
+                                        {
+                                            "character_id": "char_02",
+                                            "emotion": "紧张",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    html = pdf_exporter.render_html(payload)
+    assert "第 2 集 · 场景 1 · 镜头 1" in html
+    assert "ep2_sc1_sh1" not in html
+    assert "沈云洲" in html
+    assert "林晚" in html
+    assert "char_01" not in html
+    assert "char_02" not in html
 
 
 def test_pdf_render_html_overview_escapes() -> None:
@@ -537,3 +592,41 @@ def test_overview_fallback_document_shape() -> None:
     # Only the first 10 chapters are listed in the fallback overview.
     assert len(doc["episodes"]) == 10
     assert doc["is_fallback"] is True
+
+
+def test_word_render_docx_screenwriter() -> None:
+    from app.exporters.word_exporter import word_exporter
+
+    if not word_exporter.available():
+        pytest.skip("python-docx not installed")
+
+    payload = {
+        "schema_type": "screenwriter",
+        "schema_version": "screenwriter-1.0",
+        "title": "测试剧本",
+        "episodes": [
+            {
+                "episode_number": 1,
+                "content": {
+                    "episode_number": 1,
+                    "title": "初遇",
+                    "episode_summary": "两人相遇",
+                    "scenes": [
+                        {
+                            "slug_line": "内景 - 咖啡馆 - 日",
+                            "action_description": "林晚独自坐着。",
+                            "dialogues": [
+                                {
+                                    "character": "沈云洲",
+                                    "line": "这位置有人吗？",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    data = word_exporter.render_docx(payload)
+    assert data[:2] == b"PK"
+    assert len(data) > 1000

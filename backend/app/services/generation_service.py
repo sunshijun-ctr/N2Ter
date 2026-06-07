@@ -18,6 +18,7 @@ from app.models import (
     TaskStatus,
     TaskType,
 )
+from app.services.character_profile_utils import ensure_character_profiles
 from app.services.episode_service import episode_service
 from app.services.llm_service import LLMError, llm_service
 from app.services.prompt_loader import prompt_loader
@@ -236,34 +237,8 @@ class GenerationService:
             content["scenes"] = []
         if schema_type == SchemaType.ai_video.value:
             content = self._normalise_ai_video_scenes(content, episode)
-            content = self._ensure_character_profiles(content, novel)
-        return content
-
-    @staticmethod
-    def _ensure_character_profiles(content: dict, novel) -> dict:
-        """Ensure AI video episodes carry id→中文名 mapping for char_01 refs."""
-        profiles = content.get("character_profiles")
-        if isinstance(profiles, list) and profiles:
-            return content
-        arcs = (getattr(novel, "character_arcs", None) if novel else None) or []
-        built: list[dict] = []
-        for index, arc in enumerate(arcs):
-            if not isinstance(arc, dict):
-                continue
-            name = arc.get("name")
-            if not name:
-                continue
-            built.append(
-                {
-                    "id": f"char_{index + 1:02d}",
-                    "name": str(name),
-                    "appearance": arc.get("one_liner")
-                    or (arc.get("arc") or {}).get("start")
-                    or "",
-                }
-            )
-        if built:
-            content["character_profiles"] = built
+            arcs = (getattr(novel, "character_arcs", None) if novel else None) or []
+            content = ensure_character_profiles(content, arcs)
         return content
 
     @staticmethod

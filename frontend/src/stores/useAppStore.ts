@@ -1178,43 +1178,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       agentStepsByEpisode: { ...state.agentStepsByEpisode, [episodeId]: [] },
     }))
     const novelId = get().currentNovel?.id
-    let stepWs: { close: () => void } | null = null
+    // 基线：忽略历史事件（含本集上次生成的旧步骤）。WS 与轮询双路接收 agent_episode_step，
+    // 按事件 id 去重——这样即使 WS 代理抽风，轮询兜底也能把执行步骤补齐。
+    let sinceId = 0
     if (novelId) {
-      // 基线：忽略 WS 重放的历史事件（含本集上一次生成的旧步骤）。
-      let sinceId = 0
       try {
         const prior = await api.novels.progress(novelId)
         sinceId = prior.reduce((m, e) => Math.max(m, e.id), 0)
       } catch {
         sinceId = 0
       }
+    }
+    const ingestStepEvent = (evt: { id: number; eventType: string; payload: unknown }) => {
+      if (evt.id <= sinceId || evt.eventType !== 'agent_episode_step') return
+      const p = evt.payload as {
+        episode_id?: string
+        step_index?: number
+        phase?: string
+        label?: string
+        tools?: string[]
+      }
+      if (p.episode_id !== episodeId) return
+      set((state) => {
+        const prev = state.agentStepsByEpisode[episodeId] ?? []
+        if (prev.some((s) => s.eventId === evt.id)) return state // 去重：两路收到同一事件
+        const step: AgentStep = {
+          eventId: evt.id,
+          stepIndex: Number(p.step_index ?? prev.length + 1),
+          phase: String(p.phase ?? ''),
+          label: String(p.label ?? ''),
+          tools: Array.isArray(p.tools) ? p.tools : [],
+        }
+        return {
+          agentStepsByEpisode: {
+            ...state.agentStepsByEpisode,
+            [episodeId]: [...prev, step],
+          },
+        }
+      })
+    }
+
+    let stepWs: { close: () => void } | null = null
+    if (novelId) {
       stepWs = connectNovelProgressWs(novelId, {
-        onProgress: (msg) => {
-          if (msg.id <= sinceId || msg.event_type !== 'agent_episode_step') return
-          const p = msg.payload as {
-            episode_id?: string
-            step_index?: number
-            phase?: string
-            label?: string
-            tools?: string[]
-          }
-          if (p.episode_id !== episodeId) return
-          set((state) => {
-            const prev = state.agentStepsByEpisode[episodeId] ?? []
-            const step: AgentStep = {
-              stepIndex: Number(p.step_index ?? prev.length + 1),
-              phase: String(p.phase ?? ''),
-              label: String(p.label ?? ''),
-              tools: Array.isArray(p.tools) ? p.tools : [],
-            }
-            return {
-              agentStepsByEpisode: {
-                ...state.agentStepsByEpisode,
-                [episodeId]: [...prev, step],
-              },
-            }
-          })
-        },
+        onProgress: (msg) =>
+          ingestStepEvent({ id: msg.id, eventType: msg.event_type, payload: msg.payload }),
       })
     }
     try {
@@ -1225,6 +1233,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       let finalEpisode: Episode | null = null
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500))
+        // 轮询兜底：把 WS 可能漏掉的执行步骤补上（ingest 内部按 id 去重）。
+        if (novelId) {
+          try {
+            const events = await api.novels.progress(novelId)
+            for (const evt of events) ingestStepEvent(evt)
+          } catch {
+            // best-effort telemetry; ignore
+          }
+        }
         const ep = await api.episodes.get(episodeId)
         if (ep.status !== 'generating' || Date.now() > deadline) {
           finalEpisode = ep
@@ -1300,7 +1317,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   requestExport: async (format) => {
     const { currentScreenplay, currentNovel, apiConnected } = get()
-    const label = format === 'yaml' ? 'YAML' : format === 'pdf' ? 'PDF' : 'ZIP'
+    const label =
+      format === 'yaml'
+        ? 'YAML'
+        : format === 'pdf'
+          ? 'PDF'
+          : format === 'docx'
+            ? 'Word'
+            : 'ZIP'
 
     if (!currentNovel) {
       return { ok: false, message: '请先选择小说项目' }
@@ -1331,10 +1355,19 @@ export const useAppStore = create<AppState>((set, get) => ({
             message: `${label} 导出超时：任务仍在排队，请确认 Celery worker 已启动后重试`,
           }
         }
+        const ext =
+          format === 'yaml'
+            ? 'yaml'
+            : format === 'pdf'
+              ? 'pdf'
+              : format === 'docx'
+                ? 'docx'
+                : 'zip'
         return {
           ok: true,
           message: `《${currentNovel.title}》${label} 已生成，点击下方链接下载`,
           downloadUrl: api.exports.downloadUrl(job.id),
+          downloadFilename: `${currentNovel.title}.${ext}`,
           jobId: job.id,
         }
       } catch (e) {

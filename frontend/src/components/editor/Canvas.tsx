@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Sparkles,
   Trash2,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AutoInput } from '@/components/ui/auto-input'
@@ -254,6 +255,19 @@ function ShotEditor({
                 background: e.target.value || undefined,
               })
             }
+          />
+        </Field>
+        <Field label="主体">
+          <AutoInput
+            className="text-xs"
+            minChars={3}
+            value={shot.subject ?? ''}
+            onChange={(e) =>
+              updateShot(episodeId, sceneId, shot.id, {
+                subject: e.target.value || undefined,
+              })
+            }
+            placeholder="画面主体角色"
           />
         </Field>
       </div>
@@ -546,6 +560,34 @@ function isShotScene(scene: Scene) {
   return Boolean(scene.shots && scene.shots.length > 0)
 }
 
+/** 生成进度面板里的一行步骤：完成 / 进行中 / 失败 三态。 */
+function StepRow({ state, text }: { state: 'done' | 'running' | 'failed'; text: string }) {
+  return (
+    <li className="flex items-start gap-2 text-sm">
+      <span className="mt-0.5 shrink-0">
+        {state === 'done' ? (
+          <Check className="h-3.5 w-3.5 text-primary" />
+        ) : state === 'failed' ? (
+          <X className="h-3.5 w-3.5 text-destructive" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        )}
+      </span>
+      <span
+        className={cn(
+          'leading-snug',
+          state === 'running' ? 'text-foreground' : 'text-muted-foreground',
+        )}
+      >
+        {text}
+        {state === 'running' && (
+          <span className="ml-1.5 text-xs text-muted-foreground">· 进行中…</span>
+        )}
+      </span>
+    </li>
+  )
+}
+
 /** 生成进度面板：自带一个一直在走的计时器，让用户随时能判断「还在干活 vs 卡死」。
  *  只在本集处于 generating 时挂载，挂载时刻即生成起点。 */
 function GenerationProgress({
@@ -566,6 +608,20 @@ function GenerationProgress({
   // 计时器在涨、step 在涨 → 在干活；超过这个阈值还没动静，提示可能卡住。
   const looksStuck = elapsed > 90 && steps.length === 0
 
+  // 场景是并发起草的，事件天然乱序到达；这里整理成「按场号有序 + 每场独立状态」。
+  const hasPlan = steps.some((s) => s.phase === 'plan')
+  const doneScenes = new Set(
+    steps.filter((s) => s.phase === 'draft_done').map((s) => s.stepIndex),
+  )
+  const failedScenes = new Set(
+    steps.filter((s) => s.phase === 'draft_failed').map((s) => s.stepIndex),
+  )
+  const draftScenes = Array.from(
+    new Map(steps.filter((s) => s.phase === 'draft').map((s) => [s.stepIndex, s])).values(),
+  ).sort((a, b) => a.stepIndex - b.stepIndex)
+  const planDone = draftScenes.length > 0
+  const researchOnly = draftScenes.length === 0 && steps.some((s) => s.phase === 'research')
+
   return (
     <div className="rounded-lg border border-dashed border-border/60 p-5">
       <div className="mb-3 flex items-center justify-between gap-2 text-sm font-medium text-foreground">
@@ -583,25 +639,17 @@ function GenerationProgress({
         </p>
       ) : (
         <ol className="flex flex-col gap-2">
-          {steps.map((s, i) => {
-            const active = i === steps.length - 1
-            return (
-              <li key={`${s.stepIndex}-${i}`} className="flex items-start gap-2 text-sm">
-                <span className="mt-0.5 shrink-0">
-                  {active ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                  ) : (
-                    <Check className="h-3.5 w-3.5 text-primary" />
-                  )}
-                </span>
-                <span
-                  className={cn('leading-snug', active ? 'text-foreground' : 'text-muted-foreground')}
-                >
-                  {s.label || s.phase}
-                  {active && <span className="ml-1.5 text-xs text-muted-foreground">· 进行中…</span>}
-                </span>
-              </li>
-            )
+          {hasPlan && (
+            <StepRow state={planDone ? 'done' : 'running'} text="规划本集场景大纲" />
+          )}
+          {researchOnly && <StepRow state="running" text="检索原著资料…" />}
+          {draftScenes.map((s) => {
+            const state = failedScenes.has(s.stepIndex)
+              ? 'failed'
+              : doneScenes.has(s.stepIndex)
+                ? 'done'
+                : 'running'
+            return <StepRow key={s.stepIndex} state={state} text={s.label || `撰写第 ${s.stepIndex} 场`} />
           })}
         </ol>
       )}

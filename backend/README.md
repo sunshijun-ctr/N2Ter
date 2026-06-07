@@ -89,9 +89,11 @@ Tasks: `preprocess_novel`, `generate_episode`, `export_screenplay`.
 
 ### Export (YAML / PDF / ZIP)
 
-`POST /screenplays/{id}/export` with `export_format` = `yaml`, `pdf`, or `zip`
+`POST /screenplays/{id}/export` with `export_format` = `yaml`, `pdf`, `docx`, or `zip`
 (ZIP bundles the YAML plus a PDF when available). PDF uses WeasyPrint with a
-per-schema layout.
+per-schema layout. **Word (.docx)** uses `python-docx` (included in main deps;
+Docker images verify it at build time — run `docker compose up --build` after
+pulling updates).
 
 PDF needs WeasyPrint **and** its GTK native libraries. On Windows/conda:
 

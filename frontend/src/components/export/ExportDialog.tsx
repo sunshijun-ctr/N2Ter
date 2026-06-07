@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Download, FileArchive, FileCode2, FileText, X } from 'lucide-react'
+import { Download, FileArchive, FileCode2, FileText, FileType2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/ui/loading'
 import { cn } from '@/lib/utils'
@@ -14,7 +14,8 @@ const formats: {
 }[] = [
   { value: 'yaml', label: 'YAML', desc: '结构化数据，供其他工具消费', icon: FileCode2 },
   { value: 'pdf', label: 'PDF', desc: '人类可读，自定义剧本排版', icon: FileText },
-  { value: 'zip', label: 'ZIP 打包', desc: 'YAML + PDF + 概览版一次性导出', icon: FileArchive },
+  { value: 'docx', label: 'Word', desc: 'Microsoft Word 文档，便于二次编辑', icon: FileType2 },
+  { value: 'zip', label: 'ZIP 打包', desc: 'YAML + PDF + Word 一次性打包', icon: FileArchive },
 ]
 
 export function ExportDialog() {
@@ -127,7 +128,7 @@ export function ExportDialog() {
             {result.ok && result.downloadUrl && (
               <a
                 href={result.downloadUrl}
-                download
+                download={result.downloadFilename}
                 className="mt-2 inline-flex items-center gap-1.5 font-medium underline underline-offset-2"
               >
                 <Download className="h-4 w-4" />

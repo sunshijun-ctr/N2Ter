@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     agent_tool_call_limit: int = 3
     agent_unlimited_tool: str = "chapter_search"
 
+    # ----- Episode generation agent (per-episode ReAct budgets) -----
+    # Fewer rounds = fewer sequential LLM round-trips = faster. Scenes are drafted
+    # concurrently (episode_scene_concurrency at a time) instead of serially, which
+    # is the single biggest speed-up for a multi-scene episode.
+    episode_outline_max_steps: int = 3
+    episode_scene_max_steps: int = 2
+    episode_max_scenes: int = 8
+    episode_scene_concurrency: int = 4
+
     # ----- Conversation auto-compression (Design.md §10.4.3) -----
     auto_compress_enabled: bool = True
     context_window_tokens: int = 200_000

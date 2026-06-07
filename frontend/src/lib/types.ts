@@ -22,7 +22,7 @@ export type ConversationStatus = 'active' | 'archived'
 
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'system'
 
-export type ExportFormat = 'yaml' | 'pdf' | 'zip'
+export type ExportFormat = 'yaml' | 'pdf' | 'docx' | 'zip'
 
 export type ExportStatus = 'pending' | 'running' | 'done' | 'failed'
 
@@ -127,6 +127,8 @@ export interface Episode extends Timestamped {
 
 /** 生成时 agent 的一个可见执行步骤（用于 UI 实时展示执行过程） */
 export interface AgentStep {
+  /** 进度事件的全局自增 id，用于 WS 与轮询两路来源去重 */
+  eventId: number
   stepIndex: number
   /** research | draft | … */
   phase: string
@@ -197,6 +199,7 @@ export interface ExportResult {
   ok: boolean
   message: string
   downloadUrl?: string
+  downloadFilename?: string
   jobId?: string
 }
 

@@ -62,7 +62,9 @@ async def download_export(export_id: UUID, db: AsyncSession = Depends(get_db)) -
     media_types = {
         ".yaml": "application/x-yaml",
         ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".zip": "application/zip",
     }
     media_type = media_types.get(path.suffix, "application/octet-stream")
-    return FileResponse(path, filename=path.name, media_type=media_type)
+    filename = await export_service.download_filename(db, export)
+    return FileResponse(path, filename=filename, media_type=media_type)

@@ -105,7 +105,7 @@ CREATE TYPE conversation_status AS ENUM ('active', 'archived');
 CREATE TYPE message_role AS ENUM ('user', 'assistant', 'tool', 'system');
 
 -- 导出格式
-CREATE TYPE export_format AS ENUM ('yaml', 'pdf', 'zip');
+CREATE TYPE export_format AS ENUM ('yaml', 'pdf', 'docx', 'zip');
 CREATE TYPE export_status AS ENUM ('pending', 'running', 'done', 'failed');
 
 -- =====================================================================

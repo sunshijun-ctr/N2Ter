@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY backend/pyproject.toml ./backend/pyproject.toml
-RUN pip install --no-cache-dir "./backend[pdf,vector]"
+RUN pip install --no-cache-dir "./backend[pdf,vector]" \
+    && python -c "import docx; import weasyprint"
 
 COPY backend ./backend
 COPY db ./db

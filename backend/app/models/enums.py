@@ -80,6 +80,7 @@ class MessageRole(str, enum.Enum):
 class ExportFormat(str, enum.Enum):
     yaml = "yaml"
     pdf = "pdf"
+    docx = "docx"
     zip = "zip"
 
 

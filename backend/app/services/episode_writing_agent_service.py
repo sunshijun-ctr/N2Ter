@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import get_settings
+from app.db import get_sessionmaker
 from app.models import (
     Episode,
     EpisodeStatus,
@@ -59,12 +61,17 @@ _TOOL_LABELS = {
 class EpisodeWritingAgentService:
     # Per-scene incremental generation: a small ReAct budget per stage keeps each
     # LLM call's input/output small, so generation never approaches the model's
-    # max_tokens ceiling regardless of episode size or count.
-    outline_max_steps = 5
-    scene_max_steps = 4
-    max_tool_calls_per_stage = 8
-    max_tool_calls_per_tool = 3
-    max_scenes = 12
+    # max_tokens ceiling regardless of episode size or count. Budgets + scene
+    # concurrency come from settings (see core.Settings) so they're tunable.
+    max_tool_calls_per_stage = 5
+    max_tool_calls_per_tool = 2
+
+    def __init__(self) -> None:
+        settings = get_settings()
+        self.outline_max_steps = settings.episode_outline_max_steps
+        self.scene_max_steps = settings.episode_scene_max_steps
+        self.max_scenes = settings.episode_max_scenes
+        self.scene_concurrency = max(1, settings.episode_scene_concurrency)
 
     async def generate_episode(
         self, db: AsyncSession, episode: Episode, task: Task | None = None
@@ -118,8 +125,11 @@ class EpisodeWritingAgentService:
                 "stop_available": True,
             }
 
+        from app.models import Novel
+
+        novel = await db.get(Novel, screenplay.novel_id)
         content = generation_service._normalise_content(
-            result["episode_content"], screenplay, episode
+            result["episode_content"], screenplay, episode, novel
         )
         episode.content = content
         episode.status = EpisodeStatus.done
@@ -222,7 +232,6 @@ class EpisodeWritingAgentService:
 
     async def _react_to_json(
         self,
-        db: AsyncSession,
         screenplay: Screenplay,
         episode: Episode,
         *,
@@ -249,7 +258,7 @@ class EpisodeWritingAgentService:
 
             tool_names = [(c.get("function") or {}).get("name", "") for c in calls]
             await self._emit_step(
-                db, screenplay, episode,
+                screenplay, episode,
                 step_index=step_index, phase="research",
                 label="检索原著 · " + "、".join(
                     _TOOL_LABELS.get(n, n) for n in tool_names
@@ -307,7 +316,6 @@ class EpisodeWritingAgentService:
 
     async def _emit_step(
         self,
-        db: AsyncSession,
         screenplay: Screenplay,
         episode: Episode,
         *,
@@ -317,21 +325,26 @@ class EpisodeWritingAgentService:
         tools: list[str] | None = None,
     ) -> None:
         """Persist one visible ReAct step so the UI can show the agent's live
-        progress. Telemetry must never break generation."""
+        progress. Uses its own short-lived session (not the caller's) so it is
+        safe to call from concurrently-drafted scenes, and so telemetry commits
+        immediately without touching the generation transaction. Telemetry must
+        never break a run."""
         try:
-            await task_service.record_progress(
-                db,
-                screenplay.novel_id,
-                "agent_episode_step",
-                {
-                    "episode_id": str(episode.id),
-                    "episode_num": episode.episode_num,
-                    "step_index": step_index,
-                    "phase": phase,
-                    "label": label,
-                    "tools": tools or [],
-                },
-            )
+            async_session = get_sessionmaker()
+            async with async_session() as session:
+                await task_service.record_progress(
+                    session,
+                    screenplay.novel_id,
+                    "agent_episode_step",
+                    {
+                        "episode_id": str(episode.id),
+                        "episode_num": episode.episode_num,
+                        "step_index": step_index,
+                        "phase": phase,
+                        "label": label,
+                        "tools": tools or [],
+                    },
+                )
         except Exception:  # noqa: BLE001 - never let progress telemetry fail a run
             pass
 
@@ -372,7 +385,7 @@ class EpisodeWritingAgentService:
 
         # ---- Stage 1: episode outline (small output, no full scene content) ----
         await self._emit_step(
-            db, screenplay, episode, step_index=0, phase="plan",
+            screenplay, episode, step_index=0, phase="plan",
             label="规划本集场景大纲",
         )
         outline_payload = {
@@ -400,7 +413,7 @@ class EpisodeWritingAgentService:
             },
         }
         outline = await self._react_to_json(
-            db, screenplay, episode,
+            screenplay, episode,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(outline_payload, ensure_ascii=False)},
@@ -411,52 +424,97 @@ class EpisodeWritingAgentService:
         if not isinstance(scene_briefs, list) or not scene_briefs:
             raise LLMError("Episode outline produced no scenes")
         scene_briefs = scene_briefs[: self.max_scenes]
-
-        # ---- Stage 2: draft each scene with its own targeted retrieval ----
-        scenes: list[dict[str, Any]] = []
-        digests: list[dict[str, Any]] = []
         total = len(scene_briefs)
-        for idx, brief in enumerate(scene_briefs, start=1):
-            intent = brief.get("intent") if isinstance(brief, dict) else ""
-            intent = str(intent or "")
-            await self._emit_step(
-                db, screenplay, episode, step_index=idx, phase="draft",
-                label=f"撰写第 {idx}/{total} 场 · {intent[:24]}",
-            )
-            scene_payload = {
-                "task": "draft_one_scene",
-                "schema_type": schema_type,
-                "schema_definition": schema_def,
-                "episode_num": episode.episode_num,
-                "scene_brief": brief,
-                "prior_scenes_digest": digests,
-                "screenplay_memory": memory,
-                "instruction": (
-                    "用 chapter_search / chapter_get(summary/key_events) 检索本场所需原文，"
-                    "只输出这一个场景对象，严格遵循 schema_definition 中 scenes[] 单个场景的字段"
-                    "（逐字段对齐，禁止自创字段名）。不要输出整集，不要输出 scenes 数组。"
-                ),
-                "output_contract": {
-                    "scene": "符合 schema scenes[] 的单个场景对象",
-                    "scene_digest": "一句话概括本场结果，供下一场衔接",
-                },
+
+        # Stable character roster (id + 中文名) so every scene references the SAME
+        # people consistently; this is what makes the UI show real names instead
+        # of "角色 01/02". Built from preprocessing arcs, topped up with names the
+        # outline introduced (covers novels whose arcs came back empty).
+        roster = self._build_roster(novel, outline)
+        roster_hint = (
+            "对白角色统一使用下面 character_profiles 中的真实中文名；"
+            "ai_video 的 character_id 必须取自 character_profiles.id，禁止凭空编号；"
+            "若需要表中没有的角色，用其真实中文名填写 character 字段，"
+            "不要使用 char_01 这类占位编号。"
+        )
+        # Compact neighbour map gives each independently-drafted scene enough
+        # continuity context without a sequential running digest (which would
+        # force serial drafting). This is what unlocks concurrent scenes.
+        outline_digest = [
+            {
+                "scene_number": (b.get("scene_number") if isinstance(b, dict) else None) or i,
+                "intent": str((b.get("intent") if isinstance(b, dict) else "") or ""),
             }
-            out = await self._react_to_json(
-                db, screenplay, episode,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(scene_payload, ensure_ascii=False)},
-                ],
-                tool_specs=tool_specs, ctx=ctx, max_steps=self.scene_max_steps,
-            )
+            for i, b in enumerate(scene_briefs, start=1)
+        ]
+
+        # ---- Stage 2: draft scenes CONCURRENTLY, each with targeted retrieval ----
+        semaphore = asyncio.Semaphore(self.scene_concurrency)
+
+        async def _draft_scene(idx: int, brief: Any) -> dict[str, Any] | None:
+            intent = str((brief.get("intent") if isinstance(brief, dict) else "") or "")
+            async with semaphore:
+                await self._emit_step(
+                    screenplay, episode, step_index=idx, phase="draft",
+                    label=f"撰写第 {idx}/{total} 场 · {intent[:24]}",
+                )
+                scene_payload = {
+                    "task": "draft_one_scene",
+                    "schema_type": schema_type,
+                    "schema_definition": schema_def,
+                    "episode_num": episode.episode_num,
+                    "scene_brief": brief,
+                    "episode_outline_digest": outline_digest,
+                    "character_profiles": roster,
+                    "screenplay_memory": memory,
+                    "instruction": (
+                        "用 chapter_search / chapter_get(summary/key_events) 检索本场所需原文，"
+                        "只输出这一个场景对象，严格遵循 schema_definition 中 scenes[] 单个场景的字段"
+                        "（逐字段对齐，禁止自创字段名）。不要输出整集，不要输出 scenes 数组。"
+                        + roster_hint
+                    ),
+                    "output_contract": {
+                        "scene": "符合 schema scenes[] 的单个场景对象",
+                    },
+                }
+                try:
+                    out = await self._react_to_json(
+                        screenplay, episode,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": json.dumps(scene_payload, ensure_ascii=False)},
+                        ],
+                        tool_specs=tool_specs, ctx=ctx, max_steps=self.scene_max_steps,
+                    )
+                except LLMError as exc:
+                    _logger.warning("Scene %s draft failed: %s", idx, exc)
+                    await self._emit_step(
+                        screenplay, episode, step_index=idx, phase="draft_failed",
+                        label=f"第 {idx}/{total} 场 失败",
+                    )
+                    return None
             nested = out.get("scene")
             scene_obj = nested if isinstance(nested, dict) else out
             if isinstance(scene_obj, dict):
                 scene_obj.setdefault("scene_number", idx)
-                scenes.append(scene_obj)
-            digests.append(
-                {"scene_number": idx, "digest": out.get("scene_digest") or intent}
+                # 本场完成事件：UI 据此把对应场号标记为「完成」（并行下场号是乱序的）。
+                await self._emit_step(
+                    screenplay, episode, step_index=idx, phase="draft_done",
+                    label=f"第 {idx}/{total} 场 完成",
+                )
+                return scene_obj
+            await self._emit_step(
+                screenplay, episode, step_index=idx, phase="draft_failed",
+                label=f"第 {idx}/{total} 场 失败",
             )
+            return None
+
+        drafted = await asyncio.gather(
+            *(_draft_scene(i, b) for i, b in enumerate(scene_briefs, start=1))
+        )
+        scenes = [s for s in drafted if isinstance(s, dict)]
+        if not scenes:
+            raise LLMError("All scenes failed to draft")
 
         # ---- Stage 3: assemble the full episode (normalisation happens upstream) ----
         episode_content = {
@@ -466,6 +524,7 @@ class EpisodeWritingAgentService:
             "episode_summary": outline.get("episode_summary", ""),
             "key_conflict": outline.get("key_conflict", ""),
             "emotional_arc": outline.get("emotional_arc", ""),
+            "character_profiles": roster,
             "scenes": scenes,
         }
         return {
@@ -487,6 +546,38 @@ class EpisodeWritingAgentService:
             "critique_summary": [],
             "warnings": [],
         }
+
+    @staticmethod
+    def _build_roster(novel: Novel | None, outline: dict[str, Any]) -> list[dict[str, str]]:
+        """Stable id→中文名 roster for the whole episode. Preprocessing character
+        arcs come first (they carry appearance), then any extra names the outline
+        introduced, each assigned the next char_0N id. This is what lets the UI
+        resolve every character_id reference to a real name instead of "角色 N"."""
+        roster: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(name: str, appearance: str = "") -> None:
+            name = (name or "").strip()
+            if not name or name in seen:
+                return
+            seen.add(name)
+            roster.append(
+                {"id": f"char_{len(roster) + 1:02d}", "name": name, "appearance": appearance}
+            )
+
+        for arc in getattr(novel, "character_arcs", None) or []:
+            if not isinstance(arc, dict):
+                continue
+            _add(
+                str(arc.get("name") or ""),
+                str(arc.get("one_liner") or (arc.get("arc") or {}).get("start") or ""),
+            )
+        for scene in outline.get("scenes") or []:
+            if not isinstance(scene, dict):
+                continue
+            for nm in scene.get("characters") or []:
+                _add(str(nm))
+        return roster
 
     async def _parse_or_retry(
         self, messages: list[dict[str, Any]], content: str, *, attempts: int = 3

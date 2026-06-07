@@ -152,6 +152,9 @@ def test_basic_authoring_flow_against_database() -> None:
         download_response = client.get(f"/api/exports/{export['id']}/download")
         assert download_response.status_code == 200, download_response.text
         assert "schema_type: screenwriter" in download_response.text
+        disposition = download_response.headers.get("content-disposition", "")
+        assert "测试小说" in disposition
+        assert disposition.endswith('.yaml"') or "filename*=" in disposition
 
 
 def test_overview_generation_creates_overview_screenplay() -> None:
@@ -562,6 +565,31 @@ def test_pdf_and_zip_export() -> None:
         pdf_download = client.get(f"/api/exports/{pdf_export['id']}/download")
         assert pdf_download.status_code == 200
         assert pdf_download.content[:5] == b"%PDF-"
+
+        from app.exporters.word_exporter import word_exporter
+
+        if not word_exporter.available():
+            pytest.skip("python-docx not installed")
+
+        docx_export = client.post(
+            f"/api/screenplays/{screenplay['id']}/export", json={"export_format": "docx"}
+        ).json()
+        assert docx_export["status"] == "done", docx_export
+        assert docx_export["file_url"].endswith(".docx")
+        docx_download = client.get(f"/api/exports/{docx_export['id']}/download")
+        assert docx_download.status_code == 200
+        assert docx_download.content[:2] == b"PK"
+        disposition = docx_download.headers.get("content-disposition", "")
+        assert "导出小说" in disposition
+
+        import io
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(zip_download.content)) as archive:
+            names = archive.namelist()
+            assert any(name.endswith(".yaml") for name in names)
+            assert any(name.endswith(".docx") for name in names)
+            assert any("导出小说" in name for name in names)
 
 
 def test_export_dispatches_to_celery_when_async(monkeypatch) -> None:

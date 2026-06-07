@@ -13,7 +13,11 @@ import type {
 } from './api-types'
 import {
   buildCharacterIdMap,
+  type CharacterProfileLike,
+  isCharacterIdToken,
+  isCharacterToken,
   resolveCharacterRef,
+  resolveCharacterText,
   toCharacterIdForSave,
 } from './character-profiles'
 import type {
@@ -205,9 +209,14 @@ function mapShot(raw: Record<string, unknown>, index: number, idMap: Map<string,
     durationSeconds:
       typeof raw.duration_seconds === 'number' ? raw.duration_seconds : undefined,
     subject: raw.subject
-      ? resolveCharacterRef(String(raw.subject), idMap) || String(raw.subject)
+      ? resolveCharacterText(String(raw.subject), idMap) ||
+        resolveCharacterRef(String(raw.subject), idMap) ||
+        String(raw.subject)
       : undefined,
-    subjectAction: raw.subject_action ? String(raw.subject_action) : undefined,
+    subjectAction: raw.subject_action
+      ? resolveCharacterText(String(raw.subject_action), idMap) ||
+        String(raw.subject_action)
+      : undefined,
     cameraAngle: raw.camera_angle ? String(raw.camera_angle) : undefined,
     cameraMovement: raw.camera_movement ? String(raw.camera_movement) : undefined,
     lighting: raw.lighting ? String(raw.lighting) : undefined,
@@ -219,13 +228,20 @@ function mapShot(raw: Record<string, unknown>, index: number, idMap: Map<string,
         const rawId = d.character_id ? String(d.character_id).trim() : undefined
         const rawChar = d.character ? String(d.character).trim() : undefined
         const ref = rawId ?? rawChar ?? ''
-        const characterId = rawId ?? (rawChar && /^char_\d+$/i.test(rawChar) ? rawChar : undefined)
+        const characterId =
+          rawId ?? (rawChar && isCharacterToken(rawChar) ? rawChar : undefined)
         const line = mapDialogueLine(d)
         if (!line) return null
+        // 优先用 id→名映射；若 id 没匹配上而另有真实中文名，用真实名兜底，
+        // 避免显示成无意义的「角色 N」。
+        let display = resolveCharacterRef(ref, idMap)
+        if ((!display || /^角色\s*\d/.test(display)) && rawChar && !isCharacterIdToken(rawChar)) {
+          display = rawChar
+        }
         return {
           id: String(d.id ?? `shotdlg-${index}-${i}`),
           characterId,
-          character: resolveCharacterRef(ref, idMap) || undefined,
+          character: display || undefined,
           line,
           voiceTone: d.voice_tone ? String(d.voice_tone) : undefined,
         }
@@ -290,8 +306,8 @@ function mapScene(raw: Record<string, unknown>, index: number, idMap: Map<string
   const hasShots = Array.isArray(shotsRaw) && shotsRaw.length > 0
   return {
     id: String(raw.id ?? raw.scene_id ?? `scene-${index}`),
-    // 编剧 agent 把 slug line 放在 `setting`
-    heading: String(raw.heading ?? raw.slug_line ?? raw.setting ?? ''),
+    // 编剧 agent 把 slug line 放在 `setting`；AI 视频版场景标识在 `location`。
+    heading: String(raw.heading ?? raw.slug_line ?? raw.setting ?? raw.location ?? ''),
     action: String(raw.action ?? raw.action_description ?? ''),
     dialogues: dialoguesRaw.map((d, i) => mapDialogue(d, i)),
     // 保留原始 JSON，使编辑回写时不丢 agent 字段
@@ -327,9 +343,12 @@ function mapDialogue(raw: Record<string, unknown>, index: number): SceneDialogue
   }
 }
 
-export function mapEpisodeContent(content: Record<string, unknown> | null | undefined): EpisodeContent {
+export function mapEpisodeContent(
+  content: Record<string, unknown> | null | undefined,
+  characterArcs?: CharacterProfileLike[],
+): EpisodeContent {
   if (!content) return { scenes: [] }
-  const idMap = buildCharacterIdMap(content.character_profiles)
+  const idMap = buildCharacterIdMap(content, characterArcs)
   const scenesRaw = (content.scenes as Record<string, unknown>[]) ?? []
   return {
     ...content,
@@ -341,14 +360,22 @@ export function mapEpisodeContent(content: Record<string, unknown> | null | unde
 export function toEpisodeContentPayload(
   content: EpisodeContent,
   existing?: Record<string, unknown> | null,
+  characterArcs?: CharacterProfileLike[],
 ): Record<string, unknown> {
-  const idMap = buildCharacterIdMap(existing?.character_profiles ?? content.character_profiles)
+  const merged = { ...(existing ?? {}), ...content } as Record<string, unknown>
+  const idMap = buildCharacterIdMap(merged, characterArcs)
   return {
     ...(existing ?? {}),
     scenes: (content.scenes ?? []).map((s, i) => {
       // AI 视频版（分镜场景）：把编辑后的分镜合并回原始 JSON，保留未编辑字段。
+      // 场景标识写回 `location`（AI 视频场景用的字段），否则编辑会丢。
       if (s.shots) {
-        return { ...(s.raw ?? {}), id: s.id, shots: s.shots.map((shot) => shotToJson(shot, idMap)) }
+        return {
+          ...(s.raw ?? {}),
+          id: s.id,
+          location: s.heading,
+          shots: s.shots.map((shot) => shotToJson(shot, idMap)),
+        }
       }
       // 合并原始 JSON，保留 agent 字段（objective/characters/rewrite_notes/
       // source_text_excerpt 等），并把编辑同时写回两套命名以兼容前后端。
